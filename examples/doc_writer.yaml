@@ -1,0 +1,19 @@
+# Another example agent
+name: doc-writer
+version: 0.2.0
+description: Generates and maintains documentation for codebases
+author: agenthub-team
+
+capabilities:
+  - documentation-generation
+  - readme-creation
+  - api-docs
+  - changelog-updates
+
+protocols:
+  - MCP
+  - A2A
+
+permissions:
+  - read-files
+  - write-files
