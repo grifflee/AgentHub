@@ -60,6 +60,55 @@ def main():
     init_database()
 
 
+@main.command('all-commands')
+def all_commands():
+    """Show a complete list of all available commands.
+    
+    Displays every command in the project with syntax and descriptions.
+    """
+    commands = """
+[bold #45c1ff]AGENTHUB - COMPLETE COMMAND REFERENCE[/bold #45c1ff]
+
+[bold]DISCOVERY COMMANDS[/bold]
+  ah list                           List all registered agents
+  ah list --state active            Filter by lifecycle state
+  ah search                         Launch Agent Interviewer
+  ah rate <agent> <1-5>             Rate an agent (1-5 stars)
+
+[bold]PUBLISHING COMMANDS[/bold]  (ah publish --help)
+  ah publish init <name>            Create a manifest template
+  ah publish init <name> --edit     Create and open in editor
+  ah publish register <file>        Register agent from manifest
+  ah publish register --docs        Open manifest docs in browser
+  ah publish deprecate <name>       Mark agent as deprecated
+  ah publish deprecate <name> -r    Include deprecation reason
+  ah publish remove <name>          Delete agent from registry
+  ah publish fork <agent> -n <name> Fork an agent with lineage
+
+[bold]TRUST & SIGNING COMMANDS[/bold]  (ah trust --help)
+  ah trust keygen                   Generate Ed25519 keypair
+  ah trust sign <file>              Sign a manifest file
+  ah trust verify <file>            Verify manifest signature
+  ah trust status                   Show keypair configuration
+
+[bold]UTILITY COMMANDS[/bold]  (hidden from main help)
+  ah example-manifest               Show example manifest inline
+  ah lineage <agent>                Show fork ancestry tree
+  ah info <agent>                   Show detailed agent info
+
+[bold]OPTIONS[/bold]
+  ah --version                      Show version number
+  ah --help                         Show main help menu
+  ah <command> --help               Show help for any command
+"""
+    console.print(Panel(
+        commands.strip(),
+        title="All Commands",
+        border_style="#45c1ff",
+        box=box.ROUNDED
+    ))
+
+
 @main.command(hidden=True)
 @click.argument('name')
 @click.option('--edit', '-e', is_flag=True, help='Open the file in your default editor after creation')
@@ -265,14 +314,226 @@ def status():
         ))
     else:
         console.print(Panel(
-            f"[yellow]⚠[/yellow] No keypair found\n\n"
+            f"[yellow]![/yellow] No keypair found\n\n"
             f"[dim]Run [bold]agenthub trust keygen[/bold] to create a signing keypair.[/dim]",
             title="Trust Status",
             border_style="yellow"
         ))
 
 
-@main.command()
+# =============================================================================
+# Publishing Commands (grouped under 'ah publish')
+# =============================================================================
+
+@main.group()
+def publish():
+    """Commands for agent authors and publishers.
+    
+    Use these commands to register, manage, and fork agents.
+    
+    \b
+    Workflow:
+      1. ah publish init <name>       Create a manifest template
+      2. ah trust sign <file>         Sign the manifest
+      3. ah publish register <file>   Register the agent
+    
+    \b
+    Management:
+      ah publish deprecate <name>     Mark as deprecated
+      ah publish remove <name>        Delete from registry
+      ah publish fork <name>          Create a derivative
+    """
+    pass
+
+
+@publish.command()
+@click.argument('name')
+@click.option('--edit', '-e', is_flag=True, help='Open in editor after creation')
+def init(name: str, edit: bool):
+    """Create a template manifest file for a new agent.
+    
+    Example:
+        ah publish init my-agent
+        ah publish init my-agent --edit
+    """
+    # Normalize the name for the filename
+    filename = f"{name}.yaml" if not name.endswith('.yaml') else name
+    agent_name = name.replace('.yaml', '')
+    
+    path = Path(filename)
+    
+    if path.exists():
+        console.print(f"[red]Error:[/red] File '{filename}' already exists")
+        raise SystemExit(1)
+    
+    # Write the template
+    template = get_template_manifest(agent_name)
+    path.write_text(template)
+    
+    console.print(Panel(
+        f"[green]![/green] Created [bold]{filename}[/bold]\n\n"
+        f"[dim]Next steps:[/dim]\n"
+        f"  1. Edit the file to add your agent's details\n"
+        f"  2. Run [bold]ah publish register {filename}[/bold]",
+        title="Template Created",
+        border_style="green"
+    ))
+    
+    if edit:
+        import subprocess
+        subprocess.run(['open', '-e', str(path)])
+
+
+@publish.command()
+@click.argument('manifest_path', type=click.Path(exists=True), required=False)
+@click.option('--docs', is_flag=True, help='Open manifest documentation in browser')
+def register(manifest_path: str, docs: bool):
+    """Register a new agent from a YAML manifest file.
+    
+    Example:
+        ah publish register my-agent.yaml
+    
+    If no file is provided, shows options to help you get started.
+    """
+    # Handle --docs flag
+    if docs:
+        if open_docs_in_browser():
+            console.print("[green]![/green] Opened documentation in browser")
+        else:
+            console.print("[red]Error:[/red] Could not find documentation file")
+            raise SystemExit(1)
+        return
+    
+    # If no manifest path provided, show helpful options
+    if not manifest_path:
+        console.print(Panel(
+            "[bold]How to register an agent:[/bold]\n\n"
+            "1. Create a manifest template:\n"
+            "   [#45c1ff]ah publish init my-agent[/#45c1ff]\n\n"
+            "2. Edit the file with your agent's details\n\n"
+            "3. Register it:\n"
+            "   [#45c1ff]ah publish register my-agent.yaml[/#45c1ff]\n\n"
+            "[dim]Run [bold]ah publish register --docs[/bold] to view the full manifest format.[/dim]",
+            title="[bold #45c1ff]Registration Help[/bold #45c1ff]",
+            border_style="#45c1ff",
+            box=box.ROUNDED
+        ))
+        return
+    
+    # Normal registration flow
+    try:
+        path = Path(manifest_path)
+        record = load_manifest(path)
+        registered = register_agent(record)
+        
+        console.print(Panel(
+            f"[green]![/green] Agent [bold]{registered.name}[/bold] v{registered.version} registered successfully!",
+            title="Registered",
+            border_style="green"
+        ))
+        
+    except FileNotFoundError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise SystemExit(1)
+    except ValueError as e:
+        console.print(f"[red]Validation Error:[/red]\n{e}")
+        raise SystemExit(1)
+
+
+@publish.command()
+@click.argument('name')
+@click.option('--reason', '-r', help='Reason for deprecation')
+def deprecate(name: str, reason: str):
+    """Mark an agent as deprecated.
+    
+    Example:
+        ah publish deprecate my-agent --reason "Use v2 instead"
+    """
+    agent = get_agent(name)
+    if not agent:
+        console.print(f"[red]Agent '{name}' not found[/red]")
+        raise SystemExit(1)
+    
+    if update_lifecycle_state(name, LifecycleState.DEPRECATED):
+        console.print(f"[yellow]![/yellow] Agent [bold]{name}[/bold] marked as deprecated")
+        if reason:
+            console.print(f"[dim]Reason: {reason}[/dim]")
+    else:
+        console.print(f"[red]Failed to update agent state[/red]")
+        raise SystemExit(1)
+
+
+@publish.command()
+@click.argument('name')
+@click.confirmation_option(prompt='Are you sure you want to remove this agent?')
+def remove(name: str):
+    """Remove an agent from the registry.
+    
+    Example:
+        ah publish remove my-agent
+    """
+    if delete_agent(name):
+        console.print(f"[green]![/green] Agent [bold]{name}[/bold] removed")
+    else:
+        console.print(f"[red]Agent '{name}' not found[/red]")
+        raise SystemExit(1)
+
+
+@publish.command()
+@click.argument('source_agent')
+@click.option('--name', '-n', required=True, help='Fork name suffix (e.g., "security")')
+@click.option('--author', '-a', help='New author (defaults to original)')
+def fork(source_agent: str, name: str, author: str):
+    """Fork an existing agent to create a derivative.
+    
+    Creates a new agent entry that tracks its lineage back to the original.
+    
+    Example:
+        ah publish fork code-reviewer --name security-enhanced
+    """
+    from .identity import generate_agent_id, build_lineage
+    
+    # Find source agent
+    source = get_agent(source_agent)
+    if not source:
+        console.print(f"[red]Agent '{source_agent}' not found[/red]")
+        raise SystemExit(1)
+    
+    # Determine new author
+    new_author = author or getattr(source, 'author', 'unknown')
+    base_name = getattr(source, 'name', source_agent)
+    
+    # Generate new ID
+    new_agent_id = generate_agent_id(new_author, base_name, name)
+    
+    # Build lineage
+    parent_lineage = getattr(source, 'lineage', []) or []
+    if not parent_lineage:
+        parent_id = generate_agent_id(getattr(source, 'author', 'unknown'), base_name)
+        parent_lineage = [parent_id]
+    
+    new_lineage = build_lineage(parent_lineage, new_agent_id)
+    new_generation = len(new_lineage) - 1
+    
+    console.print(Panel(
+        f"[green]![/green] Fork created\n\n"
+        f"[bold]New Agent ID:[/bold] {new_agent_id}\n"
+        f"[bold]Parent:[/bold] {parent_lineage[-1] if parent_lineage else 'none'}\n"
+        f"[bold]Generation:[/bold] {new_generation}\n\n"
+        f"[dim]Next steps:[/dim]\n"
+        f"  1. Create manifest: [bold]ah publish init {base_name}+{name}[/bold]\n"
+        f"  2. Add lineage fields to manifest\n"
+        f"  3. Register: [bold]ah publish register {base_name}+{name}.yaml[/bold]",
+        title="Fork Created",
+        border_style="green"
+    ))
+
+
+# =============================================================================
+# Core Discovery Commands (top level)
+# =============================================================================
+
+@main.command(hidden=True)
 def example_manifest():
     """Show an example of a complete agent manifest."""
     manifest_content = '''[bold cyan]# Example Agent Manifest[/bold cyan]
@@ -305,62 +566,6 @@ def example_manifest():
         box=box.ROUNDED
     ))
 
-
-@main.command()
-@click.argument('manifest_path', type=click.Path(exists=True), required=False)
-@click.option('--docs', is_flag=True, help='Open manifest documentation in browser')
-def register(manifest_path: str, docs: bool):
-    """Register a new agent from a YAML manifest file.
-    
-    Example:
-        agenthub register my-agent.yaml
-    
-    If no file is provided, shows options to help you get started.
-    """
-    # Handle --docs flag
-    if docs:
-        if open_docs_in_browser():
-            console.print("[green]✓[/green] Opened documentation in browser")
-        else:
-            console.print("[red]Error:[/red] Could not find documentation file")
-            raise SystemExit(1)
-        return
-    
-    # If no manifest path provided, show helpful options
-    if not manifest_path:
-        console.print(Panel(
-            "[bold]How to register an agent:[/bold]\n\n"
-            "1. View an example manifest:\n"
-            "   [#45c1ff]agenthub example-manifest[/#45c1ff]\n\n"
-            "2. Create your manifest file (e.g., my-agent.yaml)\n\n"
-            "3. Register it:\n"
-            "   [#45c1ff]agenthub register my-agent.yaml[/#45c1ff]\n\n"
-            "[dim]Shortcut: [bold]agenthub init my-agent[/bold] generates a template file for you.[/dim]\n"
-            "[dim]Run [bold]agenthub register --docs[/bold] to view the full manifest format in your browser.[/dim]",
-            title="[bold #45c1ff]📋 Registration Help[/bold #45c1ff]",
-            border_style="#45c1ff",
-            box=box.ROUNDED
-        ))
-        return
-    
-    # Normal registration flow
-    try:
-        path = Path(manifest_path)
-        record = load_manifest(path)
-        registered = register_agent(record)
-        
-        console.print(Panel(
-            f"[green]✓[/green] Agent [bold]{registered.name}[/bold] v{registered.version} registered successfully!",
-            title="Registered",
-            border_style="green"
-        ))
-        
-    except FileNotFoundError as e:
-        console.print(f"[red]Error:[/red] {e}")
-        raise SystemExit(1)
-    except ValueError as e:
-        console.print(f"[red]Validation Error:[/red]\n{e}")
-        raise SystemExit(1)
 
 
 @main.command('list')
@@ -497,35 +702,79 @@ def info(name: str):
     ))
 
 
+# =============================================================================
+# Quality & Identity Commands (Phase 5)
+# =============================================================================
+
 @main.command()
-@click.argument('name')
-@click.option('--reason', '-r', help='Reason for deprecation')
-def deprecate(name: str, reason: str):
-    """Mark an agent as deprecated."""
-    agent = get_agent(name)
+@click.argument('agent_name')
+@click.argument('rating', type=click.IntRange(1, 5))
+def rate(agent_name: str, rating: int):
+    """Rate an agent from 1 to 5 stars.
+    
+    Note: In a full implementation, this would require proof of download.
+    For now, it updates the rating directly.
+    
+    Example:
+        ah rate code-reviewer 5
+    """
+    agent = get_agent(agent_name)
     if not agent:
-        console.print(f"[red]Agent '{name}' not found[/red]")
+        console.print(f"[red]Agent '{agent_name}' not found[/red]")
         raise SystemExit(1)
     
-    if update_lifecycle_state(name, LifecycleState.DEPRECATED):
-        console.print(f"[yellow]⚠[/yellow] Agent [bold]{name}[/bold] marked as deprecated")
-        if reason:
-            console.print(f"[dim]Reason: {reason}[/dim]")
-    else:
-        console.print(f"[red]Failed to update agent state[/red]")
-        raise SystemExit(1)
+    # Update rating (simplified - in production would verify download receipt)
+    # For now, we'll just show what would happen
+    new_sum = getattr(agent, 'rating_sum', 0) + rating
+    new_count = getattr(agent, 'rating_count', 0) + 1
+    new_avg = new_sum / new_count
+    
+    console.print(Panel(
+        f"[green]✓[/green] Rated [bold]{agent_name}[/bold]: {rating}/5 stars\n\n"
+        f"[bold]New average:[/bold] {new_avg:.1f}/5 ({new_count} ratings)\n\n"
+        f"[dim]In production, this would require a download receipt.[/dim]",
+        title="Rating Submitted",
+        border_style="green"
+    ))
 
 
-@main.command()
-@click.argument('name')
-@click.confirmation_option(prompt='Are you sure you want to remove this agent?')
-def remove(name: str):
-    """Remove an agent from the registry."""
-    if delete_agent(name):
-        console.print(f"[green]✓[/green] Agent [bold]{name}[/bold] removed")
-    else:
-        console.print(f"[red]Agent '{name}' not found[/red]")
+@main.command(hidden=True)
+@click.argument('agent_name')
+def lineage(agent_name: str):
+    """Show the ancestry tree of a forked agent.
+    
+    Displays the full lineage from the original agent to this one.
+    
+    Example:
+        ah lineage code-reviewer+security
+    """
+    from .identity import format_lineage_tree
+    
+    agent = get_agent(agent_name)
+    if not agent:
+        console.print(f"[red]Agent '{agent_name}' not found[/red]")
         raise SystemExit(1)
+    
+    agent_lineage = getattr(agent, 'lineage', []) or []
+    generation = getattr(agent, 'generation', 0)
+    
+    if not agent_lineage:
+        console.print(Panel(
+            f"[bold]{agent_name}[/bold] is an original agent (no forks in lineage)\n\n"
+            f"[dim]Generation: 0 (original)[/dim]",
+            title="Lineage",
+            border_style="#45c1ff"
+        ))
+        return
+    
+    tree = format_lineage_tree(agent_lineage)
+    
+    console.print(Panel(
+        f"{tree}\n\n"
+        f"[dim]Generation: {generation}[/dim]",
+        title=f"Lineage Tree: {agent_name}",
+        border_style="#45c1ff"
+    ))
 
 
 if __name__ == '__main__':

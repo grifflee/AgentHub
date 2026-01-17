@@ -51,6 +51,41 @@ class AttestationType(str, Enum):
     CUSTOM = "custom"            # Custom attestation type
 
 
+class ExecutionLevel(str, Enum):
+    """
+    Risk level based on permissions requested (§3.2.1).
+    
+    Auto-calculated from agent's permission list to help users
+    understand the potential impact of running an agent.
+    """
+    SAFE = "safe"           # Read-only, no network, sandboxed
+    STANDARD = "standard"   # Read files, limited network
+    ELEVATED = "elevated"   # Write files, full network access
+    SYSTEM = "system"       # Execute commands, system access (dangerous)
+
+
+def calculate_execution_level(permissions: list[str]) -> ExecutionLevel:
+    """
+    Calculate the execution level based on permissions.
+    
+    Higher-risk permissions result in higher execution levels.
+    """
+    dangerous = {"execute-commands", "system-access", "sudo", "shell-access"}
+    elevated = {"write-files", "network-full", "install-packages", "delete-files"}
+    standard = {"read-files", "network-access"}
+    
+    perms_set = set(permissions)
+    
+    if perms_set & dangerous:
+        return ExecutionLevel.SYSTEM
+    elif perms_set & elevated:
+        return ExecutionLevel.ELEVATED
+    elif perms_set & standard:
+        return ExecutionLevel.STANDARD
+    else:
+        return ExecutionLevel.SAFE
+
+
 class Attestation(BaseModel):
     """
     A single attestation providing verifiable evidence about an agent.
@@ -177,6 +212,58 @@ class AgentManifest(BaseModel):
     attestations: list[Attestation] = Field(
         default_factory=list,
         description="List of third-party attestations (build, test, security, etc.)"
+    )
+    
+    # Quality Signals (Phase 5)
+    download_count: int = Field(
+        default=0,
+        description="Number of times this agent has been downloaded"
+    )
+    rating_sum: int = Field(
+        default=0,
+        description="Sum of all ratings (1-5 stars)"
+    )
+    rating_count: int = Field(
+        default=0,
+        description="Number of ratings received"
+    )
+    badges: list[str] = Field(
+        default_factory=list,
+        description="Badges earned: 'popular', 'verified', 'security-audited', etc."
+    )
+    documentation_url: Optional[str] = Field(
+        default=None,
+        description="URL to agent documentation"
+    )
+    homepage: Optional[str] = Field(
+        default=None,
+        description="URL to agent homepage or project page"
+    )
+    repository: Optional[str] = Field(
+        default=None,
+        description="URL to source code repository"
+    )
+    
+    # Identity & Lineage (Phase 5)
+    agent_id: Optional[str] = Field(
+        default=None,
+        description="Persistent unique identifier (ah:author/name[+fork])"
+    )
+    parent_id: Optional[str] = Field(
+        default=None,
+        description="Parent agent ID if this is a fork"
+    )
+    generation: int = Field(
+        default=0,
+        description="Fork generation (0=original, 1=first fork, 2=fork of fork...)"
+    )
+    lineage: list[str] = Field(
+        default_factory=list,
+        description="Full ancestry chain from original to this agent"
+    )
+    fork_name: Optional[str] = Field(
+        default=None,
+        description="Fork identifier suffix (e.g., 'security' in agent+security)"
     )
     
     # Metadata

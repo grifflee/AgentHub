@@ -1,251 +1,184 @@
-# AgentHub Master Implementation Plan
+# AgentHub Implementation Plan
 
-> **Consolidated from multiple planning sessions. This is the single source of truth for all agents working on this project.**
->
+> **Single source of truth for all development on AgentHub.**  
 > Last updated: 2026-01-17
 
 ---
 
 ## Project Overview
 
-AgentHub is a **registry for sharing AI agents** — similar to npm for JavaScript or PyPI for Python, but designed for autonomous AI agents. Key requirements from the research papers:
+AgentHub is a **registry for sharing AI agents** — like npm for JavaScript or PyPI for Python, but for autonomous AI agents.
 
 | Requirement | Description |
 |------------|-------------|
-| **Capability Clarity** | Machine-readable manifests declaring capabilities, permissions, protocols |
-| **Lifecycle Transparency** | States like active/deprecated/retired |
-| **Ecosystem Interoperability** | Support for MCP, A2A, and other protocols |
-| **Trust & Security** | Cryptographically signed manifests |
-| **Discovery** | Find agents by capability, not just keywords |
-| **Quality Signals** | Ratings, downloads, badges |
+| Capability Clarity | Machine-readable manifests with capabilities, permissions, protocols |
+| Lifecycle Transparency | States: active, deprecated, retired, revoked |
+| Ecosystem Interoperability | MCP, A2A protocol support |
+| Trust & Security | Signed manifests, provenance attestations |
+| Discovery | Find agents by capability |
+| Quality Signals | Ratings, downloads, badges |
 
 ---
 
-## Current Architecture
+## Architecture
 
 ```
 AgentHub/
 ├── src/agenthub/          # CLI package
-│   ├── cli.py             # Click-based CLI
-│   ├── models.py          # Pydantic data models
+│   ├── cli.py             # Click-based CLI commands
+│   ├── models.py          # Pydantic data models + enums
 │   ├── database.py        # SQLite + API client mode
 │   ├── manifest.py        # YAML parsing/validation
+│   ├── signing.py         # Ed25519 cryptographic signing
+│   ├── identity.py        # Agent ID + lineage utilities
 │   ├── api_client.py      # HTTP client for remote API
 │   └── help.py            # Help utilities
 ├── server/                # Flask API (optional remote mode)
 │   ├── app.py             # REST endpoints
 │   └── models.py          # SQLAlchemy models
 ├── examples/              # Sample manifests
-└── docs/                  # HTML documentation
+├── docs/                  # HTML documentation
+└── .agent/workflows/      # Agent rules (onboarding.md)
 ```
 
 **Two operating modes:**
 - **Local mode** (default): SQLite at `~/.agenthub/registry.db`
-- **Remote mode**: Set `AGENTHUB_API_URL` to use shared server
+- **Remote mode**: Set `AGENTHUB_API_URL` to use hosted server
 
 ---
 
-## ✅ Completed Features
+## Phase 1: Core MVP [COMPLETE]
 
-### Core MVP (Done)
 - [x] Agent manifest schema (name, version, capabilities, protocols, permissions)
-- [x] CLI commands: `register`, `list`, `info`, `deprecate`, `remove`
-- [x] Local SQLite storage
-- [x] YAML manifest parsing with validation
-- [x] Lifecycle states (active, deprecated, retired, revoked)
-
-### UX Improvements (Done)
-- [x] `agenthub init <name>` — Generate template manifest
-- [x] `agenthub example-manifest` — Show example inline
-- [x] `agenthub register --docs` — Open HTML documentation
-- [x] Helpful prompts when running `register` without arguments
-- [x] Available commands shown after `list`
-
-### Backend Server (Done)
-- [x] Flask REST API (`server/app.py`)
-- [x] SQLAlchemy models with PostgreSQL support
-- [x] CLI can talk to remote API via `AGENTHUB_API_URL`
-- [x] Local mode fallback preserved
+- [x] CLI commands: `register`, `list`, `info`, `search`, `deprecate`, `remove`
+- [x] Local SQLite storage in `~/.agenthub/`
+- [x] YAML manifest parsing with Pydantic validation
+- [x] Lifecycle states enum
 
 ---
 
-## 🚧 Planned Features (Not Yet Implemented)
+## Phase 2: Trust & Provenance [COMPLETE]
 
-### Phase 1: Metadata & Dependencies
+Ed25519 client-side cryptographic signing.
 
-Add richer metadata and inter-agent dependency tracking.
-
-**New fields in `models.py`:**
-```python
-# Extended Metadata
-homepage: Optional[str]          # Project URL
-repository: Optional[str]        # Source code URL
-license: Optional[str]           # SPDX license identifier
-tags: list[str]                  # Searchable tags
-
-# Dependencies
-dependencies: list[str]          # Required agents (e.g., ["text-analyzer>=1.0"])
-conflicts: list[str]             # Incompatible agents
-suggests: list[str]              # Optional recommended agents
-```
-
-**Files to modify:** `models.py`, `manifest.py`, `database.py`, `server/models.py`
+- [x] `signing.py` module with keypair generation, signing, verification
+- [x] Keys stored in `~/.agenthub/keys/`
+- [x] `ah trust keygen` — Generate Ed25519 keypair
+- [x] `ah trust sign <manifest>` — Sign manifest in-place
+- [x] `ah trust verify <manifest>` — Verify signature
+- [x] `ah trust status` — Show key configuration
+- [x] Signature fields in manifest: `signature`, `public_key`, `signed_at`
 
 ---
 
-### Phase 2: Trust & Provenance (Ed25519 Signing)
+## Phase 2.5: SLSA Attestations [SCHEMA ONLY]
 
-Cryptographic signing for manifest authenticity.
+Attestation schema added, verification not implemented.
 
-**Key Management (Client-Side Signing):**
-```
-~/.agenthub/
-├── keys/
-│   ├── private.pem    # NEVER leaves user's machine
-│   └── public.pem     # Embedded in signed manifests
-└── registry.db
-```
-
-**New commands:**
-- `agenthub keygen` — Generate Ed25519 keypair
-- `agenthub sign <manifest.yaml>` — Sign manifest in-place
-- `agenthub verify <manifest.yaml>` — Verify signature
-
-**New fields:**
-```python
-signature: Optional[str]         # Base64-encoded Ed25519 signature
-public_key: Optional[str]        # Author's public key
-signed_at: Optional[datetime]    # When signed
-```
-
-**New file:** `src/agenthub/signing.py`  
-**New dependency:** `cryptography>=41.0`
+- [x] `AttestationType` enum (build, test, security, review, registry)
+- [x] `Attestation` model with verifier, statement, signature
+- [x] `attestations: list[Attestation]` field in manifest
+- [ ] CLI command to add attestations
+- [ ] Attestation signature verification
+- [ ] CI/CD integration examples
 
 ---
 
-### Phase 2.5: SLSA-Style Attestations (Schema Added ✅)
+## Phase 3: Backend Server [COMPLETE]
 
-Third-party attestations for verifiable evidence about agents.
+Flask REST API for shared registry.
 
-**Already added to `models.py`:**
-```python
-class AttestationType(Enum):
-    BUILD = "build"       # How agent was built
-    TEST = "test"         # Tests passed
-    SECURITY = "security" # Security scan results
-    REVIEW = "review"     # Code review attestation
-    REGISTRY = "registry" # Registry admission check
-    CUSTOM = "custom"
-
-class Attestation(BaseModel):
-    type: AttestationType
-    verifier: str              # Who created this (e.g., "github-actions")
-    verifier_id: Optional[str] # URI for verifier
-    statement: str             # What was verified
-    timestamp: Optional[datetime]
-    signature: Optional[str]   # Verifier's signature
-    public_key: Optional[str]  # Verifier's public key
-    metadata: Optional[dict]   # Extra data (commit hash, etc.)
-
-# In AgentManifest:
-attestations: list[Attestation] = []
-```
-
-**Future work (not implemented yet):**
-- CLI command to add attestations
-- Verification of attestation signatures
-- CI/CD integration for automated attestations
+- [x] `server/app.py` with REST endpoints
+- [x] SQLAlchemy models in `server/models.py`
+- [x] `database.py` routes to API when `AGENTHUB_API_URL` is set
+- [x] Local fallback preserved
 
 ---
 
-### Phase 3: Governance & Lifecycle
+## Phase 4: UX Improvements [COMPLETE]
 
-Support open vs. curated submission models.
-
-**New enums and fields:**
-```python
-class SubmissionMode(Enum):
-    OPEN = "open"          # Anyone can register
-    CURATED = "curated"    # Requires approval
-
-class ReviewStatus(Enum):
-    PENDING = "pending"
-    APPROVED = "approved"
-    REJECTED = "rejected"
-
-# New fields:
-submission_mode: SubmissionMode
-review_status: Optional[ReviewStatus]
-reviewed_by: Optional[str]
-review_notes: Optional[str]
-```
-
-**New commands:**
-- `agenthub pending` — List agents awaiting review
-- `agenthub approve <name>` — Approve an agent
-- `agenthub reject <name> --reason "..."` — Reject with feedback
-
-**New file:** `src/agenthub/governance.py`
+- [x] `ah init <name>` — Generate template manifest
+- [x] `ah example-manifest` — Show example inline
+- [x] `ah register --docs` — Open HTML docs in browser
+- [x] Helpful prompts when `register` called without args
+- [x] `ah` alias for `agenthub` command
+- [x] Commands grouped: `ah trust` subcommand group
 
 ---
 
-### Phase 4: Quality Signals
+## Phase 5: Quality, Permissions & Identity [PARTIAL]
 
-Ratings, downloads, and badges.
-
-**New fields:**
-```python
-download_count: int = 0
-rating_sum: int = 0
-rating_count: int = 0
-badges: list[str] = []  # ["verified", "popular", "official"]
-```
-
-**New commands:**
-- `agenthub rate <name> <1-5>` — Rate an agent
-- Updated `list`/`info` to show ⭐ ratings and 📥 downloads
-
-**New file:** `src/agenthub/ratings.py`
+- [x] `ExecutionLevel` enum (SAFE, STANDARD, ELEVATED, SYSTEM)
+- [x] `calculate_execution_level()` function
+- [x] Quality signal fields: `download_count`, `rating_sum`, `rating_count`, `badges`
+- [x] Documentation fields: `documentation_url`, `homepage`, `repository`
+- [x] Lineage fields: `agent_id`, `parent_id`, `generation`, `lineage`, `fork_name`
+- [x] `identity.py` module with ID generation and lineage utilities
+- [x] `ah fork <agent> --name <fork>` — Fork with lineage
+- [x] `ah rate <agent> <1-5>` — Rate command (simplified)
+- [x] `ah lineage <agent>` — Show ancestry tree
+- [ ] **Download receipt verification for ratings** (on docket)
+- [ ] Persist ratings to database
+- [ ] Auto-compute "popular" badge at >10 downloads
+- [ ] Display execution level in `ah info` output
 
 ---
 
-## Tech Stack
+## Phase 6: Governance [NOT STARTED]
 
-| Component | Choice |
-|-----------|--------|
-| Language | Python 3.10+ |
-| CLI Framework | Click + rich-click |
-| Data Validation | Pydantic |
-| Local Database | SQLite |
-| Server Framework | Flask |
-| Server Database | PostgreSQL (SQLite for dev) |
-| Signing | Ed25519 via `cryptography` |
+- [ ] `SubmissionMode` enum (open, curated)
+- [ ] `ReviewStatus` enum (pending, approved, rejected)
+- [ ] Review fields: `submission_mode`, `review_status`, `reviewed_by`
+- [ ] `ah pending` — List agents awaiting review
+- [ ] `ah approve <name>` — Approve agent
+- [ ] `ah reject <name> --reason "..."` — Reject with feedback
 
 ---
 
-## Verification Approach
+## Phase 7: Extended Metadata [NOT STARTED]
 
-No automated tests exist yet. Verification is manual:
+- [ ] Add fields: `license`, `tags`, `keywords`
+- [ ] Inter-agent dependencies: `dependencies`, `conflicts`, `suggests`
+- [ ] Search by tags/keywords
+- [ ] Dependency resolution warnings
+
+---
+
+## Backlog / Future Ideas
+
+- [ ] Download receipt signing for verified ratings
+- [ ] Automated tests with pytest
+- [ ] GitHub Actions for CI/CD attestations
+- [ ] Multi-sig for high-value agents
+- [ ] Web UI for browsing agents
+- [ ] Agent Card (like Hugging Face model cards)
+
+---
+
+## Key Design Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Signing Algorithm | Ed25519 | Fast, small keys, modern |
+| Key Storage | Client-side only | No server custody |
+| ID Format | `ah:author/name[+fork]` | Clear lineage in ID |
+| CLI Alias | `ah` | Faster typing |
+| UI Style | No emojis, Rich colors | User preference |
+| Popular Badge | >10 downloads | Low bar for testing |
+| Rating Gate | Download receipt | Prevent spam |
+
+---
+
+## Testing
+
+No automated tests. Manual testing:
 
 ```bash
-# Install in dev mode
 cd /Users/griffenlee/Desktop/AgentHub
 pip install -e .
-
-# Test CLI
-agenthub --help
-agenthub init test-agent
-agenthub register test-agent.yaml
-agenthub list
-agenthub info test-agent
+ah --help
+ah list
+ah trust status
+ah fork code-reviewer --name test
+ah rate code-reviewer 5
 ```
-
----
-
-## Notes for Agents
-
-1. **This file is the master plan** — update it when making significant changes
-2. **Local mode must always work** — don't break offline functionality
-3. **Keep CLI UX consistent** — use rich panels and tables
-4. **Phase order matters** — Phase 1 schema changes are foundational
-5. **Client-side signing chosen** — private keys stay on user machines

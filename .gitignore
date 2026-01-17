@@ -3,6 +3,9 @@ notes
 agenthubdetails
 2ndagentpaper
 
+# Agent workflows (private to local development)
+.agent/
+
 # Python bytecode
 __pycache__/
 *.py[cod]
