@@ -51,6 +51,9 @@ def init_database() -> None:
                 protocols TEXT NOT NULL,
                 permissions TEXT NOT NULL,
                 lifecycle_state TEXT NOT NULL DEFAULT 'active',
+                rating_sum INTEGER NOT NULL DEFAULT 0,
+                rating_count INTEGER NOT NULL DEFAULT 0,
+                download_count INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -60,6 +63,13 @@ def init_database() -> None:
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_agents_name ON agents(name)
         """)
+        
+        # Migration: Add rating columns if they don't exist (for existing DBs)
+        for column, default in [("rating_sum", 0), ("rating_count", 0), ("download_count", 0)]:
+            try:
+                conn.execute(f"ALTER TABLE agents ADD COLUMN {column} INTEGER DEFAULT {default}")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
         
         conn.commit()
     finally:
@@ -277,8 +287,61 @@ def delete_agent(name: str) -> bool:
         conn.close()
 
 
+def update_agent_rating(name: str, rating: int) -> tuple[int, int]:
+    """
+    Add a rating to an agent.
+    
+    Args:
+        name: Agent name
+        rating: Rating value (1-5)
+        
+    Returns:
+        Tuple of (new_rating_sum, new_rating_count)
+        
+    Raises:
+        ValueError: If agent not found
+    """
+    # Remote API mode
+    if is_remote_mode():
+        from . import api_client
+        result = api_client.rate_agent(name, rating)
+        return result["rating_sum"], result["rating_count"]
+    
+    # Local SQLite mode
+    conn = get_connection()
+    now = datetime.utcnow().isoformat()
+    
+    try:
+        # First check if agent exists
+        existing = conn.execute(
+            "SELECT rating_sum, rating_count FROM agents WHERE name = ?", (name,)
+        ).fetchone()
+        
+        if not existing:
+            raise ValueError(f"Agent '{name}' not found")
+        
+        # Update ratings
+        new_sum = (existing["rating_sum"] or 0) + rating
+        new_count = (existing["rating_count"] or 0) + 1
+        
+        conn.execute(
+            """
+            UPDATE agents 
+            SET rating_sum = ?, rating_count = ?, updated_at = ?
+            WHERE name = ?
+            """,
+            (new_sum, new_count, now, name)
+        )
+        conn.commit()
+        return new_sum, new_count
+    finally:
+        conn.close()
+
+
 def _row_to_record(row: sqlite3.Row) -> AgentRecord:
     """Convert a database row to an AgentRecord."""
+    # Handle both old and new schema (migration compatibility)
+    keys = row.keys()
     return AgentRecord(
         id=row["id"],
         name=row["name"],
@@ -289,6 +352,9 @@ def _row_to_record(row: sqlite3.Row) -> AgentRecord:
         protocols=[Protocol(p) for p in json.loads(row["protocols"])],
         permissions=json.loads(row["permissions"]),
         lifecycle_state=LifecycleState(row["lifecycle_state"]),
+        rating_sum=row["rating_sum"] if "rating_sum" in keys else 0,
+        rating_count=row["rating_count"] if "rating_count" in keys else 0,
+        download_count=row["download_count"] if "download_count" in keys else 0,
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
@@ -306,6 +372,9 @@ def _dict_to_record(data: dict) -> AgentRecord:
         protocols=[Protocol(p) for p in data.get("protocols", [])],
         permissions=data.get("permissions", []),
         lifecycle_state=LifecycleState(data.get("lifecycle_state", "active")),
+        rating_sum=data.get("rating_sum", 0),
+        rating_count=data.get("rating_count", 0),
+        download_count=data.get("download_count", 0),
         created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None,
         updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else None,
     )

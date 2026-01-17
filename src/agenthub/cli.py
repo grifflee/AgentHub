@@ -33,6 +33,7 @@ from .database import (
     list_agents,
     update_lifecycle_state,
     delete_agent,
+    update_agent_rating,
 )
 from .manifest import load_manifest
 from .models import LifecycleState
@@ -604,8 +605,9 @@ def browse_list(state: str):
     table = Table(title="Registered Agents", box=box.ROUNDED)
     table.add_column("Name", style="cyan", no_wrap=True)
     table.add_column("Version", style="magenta")
+    table.add_column("Rating", style="yellow")
     table.add_column("State", style="green")
-    table.add_column("Capabilities", style="yellow")
+    table.add_column("Capabilities")
     table.add_column("Description")
     
     for agent in agents:
@@ -620,12 +622,20 @@ def browse_list(state: str):
         if len(agent.capabilities) > 3:
             caps += f" (+{len(agent.capabilities) - 3})"
         
+        # Calculate average rating
+        if agent.rating_count > 0:
+            avg = agent.rating_sum / agent.rating_count
+            rating_str = f"{avg:.1f}/5 ({agent.rating_count})"
+        else:
+            rating_str = "[dim]--[/dim]"
+        
         table.add_row(
             agent.name,
             agent.version,
+            rating_str,
             f"[{state_color}]{agent.lifecycle_state.value}[/]",
             caps,
-            agent.description[:50] + "..." if len(agent.description) > 50 else agent.description
+            agent.description[:40] + "..." if len(agent.description) > 40 else agent.description
         )
     
     console.print(table)
@@ -692,10 +702,18 @@ def info(name: str):
         LifecycleState.REVOKED: "red",
     }.get(agent.lifecycle_state, "white")
     
+    # Calculate average rating
+    if agent.rating_count > 0:
+        avg = agent.rating_sum / agent.rating_count
+        rating_str = f"{avg:.1f}/5 ({agent.rating_count} ratings)"
+    else:
+        rating_str = "No ratings yet"
+    
     console.print(Panel(
         f"[bold cyan]{agent.name}[/bold cyan] v{agent.version}\n"
         f"[dim]by {agent.author}[/dim]\n\n"
         f"{agent.description}\n\n"
+        f"[bold]Rating:[/bold] {rating_str}\n"
         f"[bold]Lifecycle State:[/bold] [{state_color}]{agent.lifecycle_state.value}[/]\n"
         f"[bold]Capabilities:[/bold] {', '.join(agent.capabilities) or '[dim]none[/dim]'}\n"
         f"[bold]Protocols:[/bold] {', '.join(p.value for p in agent.protocols) or '[dim]none[/dim]'}\n"
@@ -718,22 +736,19 @@ def rate(agent_name: str, rating: int):
     Example:
         ah browse rate code-reviewer 5
     """
-    agent = get_agent(agent_name)
-    if not agent:
-        console.print(f"[red]Agent '{agent_name}' not found[/red]")
+    try:
+        new_sum, new_count = update_agent_rating(agent_name, rating)
+        new_avg = new_sum / new_count
+        
+        console.print(Panel(
+            f"[green]![/green] Rated [bold]{agent_name}[/bold]: {rating}/5 stars\n\n"
+            f"[bold]New average:[/bold] {new_avg:.1f}/5 ({new_count} ratings)",
+            title="Rating Saved",
+            border_style="green"
+        ))
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
         raise SystemExit(1)
-    
-    new_sum = getattr(agent, 'rating_sum', 0) + rating
-    new_count = getattr(agent, 'rating_count', 0) + 1
-    new_avg = new_sum / new_count
-    
-    console.print(Panel(
-        f"[green]![/green] Rated [bold]{agent_name}[/bold]: {rating}/5 stars\n\n"
-        f"[bold]New average:[/bold] {new_avg:.1f}/5 ({new_count} ratings)\n\n"
-        f"[dim]In production, this would require a download receipt.[/dim]",
-        title="Rating Submitted",
-        border_style="green"
-    ))
 
 
 @main.command(hidden=True)

@@ -118,7 +118,7 @@ Flask REST API for shared registry.
 - [x] `ah rate <agent> <1-5>` — Rate command (simplified)
 - [x] `ah lineage <agent>` — Show ancestry tree
 - [ ] **Download receipt verification for ratings** (on docket)
-- [ ] Persist ratings to database
+- [x] Persist ratings to database
 - [ ] Auto-compute "popular" badge at >10 downloads
 - [ ] Display execution level in `ah info` output
 

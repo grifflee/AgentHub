@@ -82,3 +82,21 @@ def delete_agent(name: str) -> bool:
     """Delete an agent from the registry."""
     response = requests.delete(f"{API_URL}/api/agents/{name}")
     return response.status_code == 200
+
+
+def rate_agent(name: str, rating: int) -> dict:
+    """
+    Add a rating to an agent via the API.
+    
+    Args:
+        name: Agent name
+        rating: Rating value (1-5)
+        
+    Returns:
+        Dict with rating_sum, rating_count, and average
+    """
+    response = requests.post(
+        f"{API_URL}/api/agents/{name}/rate",
+        json={"rating": rating}
+    )
+    return _handle_response(response)

@@ -168,6 +168,44 @@ def delete_agent(name: str):
         db.close()
 
 
+@app.route("/api/agents/<name>/rate", methods=["POST"])
+def rate_agent(name: str):
+    """Add a rating to an agent."""
+    data = request.get_json()
+    
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+    
+    rating = data.get("rating")
+    
+    if rating is None or not isinstance(rating, int) or rating < 1 or rating > 5:
+        return jsonify({"error": "Rating must be an integer from 1 to 5"}), 400
+    
+    db = SessionLocal()
+    try:
+        agent = db.query(Agent).filter(Agent.name == name).first()
+        
+        if not agent:
+            return jsonify({"error": f"Agent '{name}' not found"}), 404
+        
+        agent.rating_sum += rating
+        agent.rating_count += 1
+        db.commit()
+        db.refresh(agent)
+        
+        return jsonify({
+            "rating_sum": agent.rating_sum,
+            "rating_count": agent.rating_count,
+            "average": agent.rating_sum / agent.rating_count
+        })
+        
+    except Exception as e:
+        db.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db.close()
+
+
 # ============================================================================
 # Search
 # ============================================================================

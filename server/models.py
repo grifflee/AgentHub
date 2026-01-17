@@ -58,6 +58,11 @@ class Agent(Base):
         default=LifecycleState.ACTIVE.value
     )
     
+    # Quality signals
+    rating_sum = Column(Integer, nullable=False, default=0)
+    rating_count = Column(Integer, nullable=False, default=0)
+    download_count = Column(Integer, nullable=False, default=0)
+    
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -74,6 +79,9 @@ class Agent(Base):
             "protocols": json.loads(self.protocols),
             "permissions": json.loads(self.permissions),
             "lifecycle_state": self.lifecycle_state,
+            "rating_sum": self.rating_sum,
+            "rating_count": self.rating_count,
+            "download_count": self.download_count,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
