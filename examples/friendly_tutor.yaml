@@ -1,0 +1,26 @@
+# Friendly Tutor Agent Manifest
+# An AI tutor agent for patient, encouraging education
+
+name: friendly-tutor
+version: 1.0.0
+description: An AI tutor that explains complex concepts in simple terms, provides encouragement, and adapts to the learner's pace and style
+author: agenthub-team
+
+# Capabilities - what this agent can do
+capabilities:
+  - concept-explanation
+  - step-by-step-guidance
+  - practice-problem-generation
+  - progress-tracking
+  - adaptive-difficulty
+  - multi-subject-support
+
+# Protocols - how to communicate with this agent
+protocols:
+  - MCP
+  - A2A
+
+# Permissions - what resources this agent needs
+permissions:
+  - read-files
+  - network-access
