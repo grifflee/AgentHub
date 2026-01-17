@@ -101,16 +101,17 @@ Ed25519 client-side cryptographic signing.
 
 ---
 
-## Phase 2.5: SLSA Attestations [SCHEMA ONLY]
+## Phase 2.5: SLSA Attestations [COMPLETE]
 
-Attestation schema added, verification not implemented.
+SLSA-style attestations for verifiable evidence about agents.
 
 - [x] `AttestationType` enum (build, test, security, review, registry)
 - [x] `Attestation` model with verifier, statement, signature
 - [x] `attestations: list[Attestation]` field in manifest
-- [ ] CLI command to add attestations
-- [ ] Attestation signature verification
-- [ ] CI/CD integration examples
+- [x] `ah trust attest <manifest>` — Add signed attestation to manifest
+- [x] `ah trust verify-attestations <manifest>` — Verify all attestations
+- [x] `sign_attestation()` and `verify_attestation()` functions in signing.py
+- [x] CI/CD integration example: `examples/github-actions-attestation.yaml`
 
 ---
 

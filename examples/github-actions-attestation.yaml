@@ -1,0 +1,144 @@
+# GitHub Actions Workflow Example for AgentHub Attestations
+# 
+# This workflow demonstrates how to automatically add SLSA-style attestations
+# to an agent manifest during CI/CD. Attestations provide verifiable evidence
+# that tests passed, security scans completed, etc.
+#
+# SETUP REQUIRED:
+# 1. Store your AgentHub private key as a GitHub Secret named AGENTHUB_PRIVATE_KEY
+#    - Generate with: ah trust keygen
+#    - Copy contents of ~/.agenthub/keys/private.pem
+# 2. Store your public key as AGENTHUB_PUBLIC_KEY (optional, for verification)
+
+name: Agent CI/CD with Attestations
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-and-attest:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install AgentHub CLI
+        run: |
+          pip install agenthub
+          # Or from source: pip install -e .
+      
+      - name: Set up signing keys
+        run: |
+          mkdir -p ~/.agenthub/keys
+          echo "${{ secrets.AGENTHUB_PRIVATE_KEY }}" > ~/.agenthub/keys/private.pem
+          echo "${{ secrets.AGENTHUB_PUBLIC_KEY }}" > ~/.agenthub/keys/public.pem
+          chmod 600 ~/.agenthub/keys/private.pem
+      
+      # ===========================================
+      # Run your tests
+      # ===========================================
+      - name: Run tests
+        id: tests
+        run: |
+          # Your test command here
+          pytest tests/ -v --tb=short
+          echo "test_count=$(pytest tests/ --collect-only -q | tail -1 | grep -oP '\d+')" >> $GITHUB_OUTPUT
+      
+      # ===========================================
+      # Add TEST attestation
+      # ===========================================
+      - name: Add test attestation
+        if: success()
+        run: |
+          ah trust attest my-agent.yaml \
+            --type test \
+            --statement "All tests passed on commit ${{ github.sha }}" \
+            --verifier "github-actions" \
+            --verifier-id "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --metadata '{"commit": "${{ github.sha }}", "branch": "${{ github.ref_name }}", "run_id": "${{ github.run_id }}"}'
+      
+      # ===========================================
+      # Run security scan
+      # ===========================================
+      - name: Run security scan
+        id: security
+        run: |
+          # Example: Run a security scanner
+          pip install safety
+          safety check --json > security-report.json || true
+          echo "vulnerabilities=$(jq '.vulnerabilities | length' security-report.json)" >> $GITHUB_OUTPUT
+      
+      # ===========================================
+      # Add SECURITY attestation
+      # ===========================================
+      - name: Add security attestation
+        if: steps.security.outputs.vulnerabilities == '0'
+        run: |
+          ah trust attest my-agent.yaml \
+            --type security \
+            --statement "Security scan passed - no vulnerabilities found" \
+            --verifier "safety" \
+            --verifier-id "https://pyup.io/safety/" \
+            --metadata '{"tool": "safety", "commit": "${{ github.sha }}"}'
+      
+      # ===========================================
+      # Add BUILD attestation
+      # ===========================================
+      - name: Add build attestation
+        run: |
+          ah trust attest my-agent.yaml \
+            --type build \
+            --statement "Built from source on GitHub Actions" \
+            --verifier "github-actions" \
+            --verifier-id "https://github.com/${{ github.repository }}" \
+            --metadata '{"commit": "${{ github.sha }}", "workflow": "${{ github.workflow }}", "runner_os": "${{ runner.os }}"}'
+      
+      # ===========================================
+      # Verify all attestations
+      # ===========================================
+      - name: Verify attestations
+        run: |
+          ah trust verify-attestations my-agent.yaml
+      
+      # ===========================================
+      # Commit updated manifest (optional)
+      # ===========================================
+      - name: Commit attestations
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add my-agent.yaml
+          git diff --staged --quiet || git commit -m "Add CI/CD attestations for ${{ github.sha }}"
+          git push
+
+# ===========================================
+# Example attestation output in manifest:
+# ===========================================
+#
+# attestations:
+#   - type: test
+#     verifier: github-actions
+#     verifier_id: https://github.com/owner/repo/actions/runs/12345
+#     statement: All tests passed on commit abc123
+#     timestamp: '2026-01-17T10:30:00+00:00'
+#     signature: <base64-signature>
+#     public_key: <base64-public-key>
+#     metadata:
+#       commit: abc123
+#       branch: main
+#       run_id: '12345'
+#
+#   - type: security
+#     verifier: safety
+#     verifier_id: https://pyup.io/safety/
+#     statement: Security scan passed - no vulnerabilities found
+#     ...

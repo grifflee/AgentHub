@@ -93,6 +93,10 @@ def all_commands():
   ah trust sign <file>              Sign a manifest file
   ah trust verify <file>            Verify manifest signature
   ah trust status                   Show keypair configuration
+  ah trust attest <file> -t <type> -s "statement"
+                                    Add signed attestation to manifest
+  ah trust verify-attestations <file>
+                                    Verify all attestations in manifest
 
 [bold]UTILITY COMMANDS[/bold]  (hidden from main help)
   ah example-manifest               Show example manifest inline
@@ -321,6 +325,145 @@ def status():
             title="Trust Status",
             border_style="yellow"
         ))
+
+
+@trust.command()
+@click.argument('manifest_path', type=click.Path(exists=True))
+@click.option('--type', '-t', 'attestation_type',
+              type=click.Choice(['build', 'test', 'security', 'review', 'registry', 'custom']),
+              required=True, help='Type of attestation')
+@click.option('--statement', '-s', required=True, help='Statement of what was verified')
+@click.option('--verifier', '-v', default=None, help='Verifier name (defaults to "local")')
+@click.option('--verifier-id', default=None, help='Verifier URI or identifier')
+@click.option('--metadata', '-m', default=None, help='JSON metadata (e.g., \'{"commit": "abc123"}\')')
+def attest(manifest_path: str, attestation_type: str, statement: str, 
+           verifier: str, verifier_id: str, metadata: str):
+    """Add a signed attestation to a manifest.
+    
+    Attestations provide verifiable evidence about an agent (tests passed,
+    security audit completed, etc.). Each attestation is signed with your
+    private key.
+    
+    Example:
+        ah trust attest my-agent.yaml --type test --statement "All 47 tests passed"
+        ah trust attest my-agent.yaml -t security -s "No vulnerabilities found" -v snyk
+    """
+    import json as json_module
+    from .signing import sign_attestation, add_attestation_to_manifest, has_keypair
+    
+    if not has_keypair():
+        console.print(Panel(
+            "[red]✗[/red] No keypair found.\n\n"
+            "Run [bold]agenthub trust keygen[/bold] first to generate a signing keypair.",
+            title="No Keypair",
+            border_style="red"
+        ))
+        raise SystemExit(1)
+    
+    # Parse metadata if provided
+    parsed_metadata = None
+    if metadata:
+        try:
+            parsed_metadata = json_module.loads(metadata)
+        except json_module.JSONDecodeError as e:
+            console.print(f"[red]Error:[/red] Invalid JSON in --metadata: {e}")
+            raise SystemExit(1)
+    
+    try:
+        path = Path(manifest_path)
+        
+        # Create signed attestation
+        attestation = sign_attestation(
+            attestation_type=attestation_type,
+            verifier=verifier or "local",
+            statement=statement,
+            verifier_id=verifier_id,
+            metadata=parsed_metadata
+        )
+        
+        # Add to manifest
+        add_attestation_to_manifest(path, attestation)
+        
+        console.print(Panel(
+            f"[green]✓[/green] Added attestation to [bold]{path.name}[/bold]\n\n"
+            f"[bold]Type:[/bold] {attestation_type}\n"
+            f"[bold]Verifier:[/bold] {verifier or 'local'}\n"
+            f"[bold]Statement:[/bold] {statement}\n"
+            f"[bold]Timestamp:[/bold] {attestation['timestamp']}\n\n"
+            f"[dim]The attestation has been signed and added to the manifest.[/dim]",
+            title="Attestation Added",
+            border_style="green"
+        ))
+    except FileNotFoundError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise SystemExit(1)
+    except Exception as e:
+        console.print(f"[red]Error adding attestation:[/red] {e}")
+        raise SystemExit(1)
+
+
+@trust.command('verify-attestations')
+@click.argument('manifest_path', type=click.Path(exists=True))
+def verify_attestations(manifest_path: str):
+    """Verify all attestations in a manifest.
+    
+    Checks the signature of each attestation to ensure they haven't been
+    tampered with.
+    
+    Example:
+        ah trust verify-attestations my-agent.yaml
+    """
+    import yaml
+    from .signing import verify_all_attestations
+    
+    try:
+        path = Path(manifest_path)
+        
+        with open(path, "r") as f:
+            manifest_data = yaml.safe_load(f)
+        
+        attestations = manifest_data.get("attestations", [])
+        
+        if not attestations:
+            console.print(Panel(
+                f"[yellow]![/yellow] No attestations found in [bold]{path.name}[/bold]\n\n"
+                "[dim]Add attestations with [bold]ah trust attest[/bold][/dim]",
+                title="No Attestations",
+                border_style="yellow"
+            ))
+            return
+        
+        results = verify_all_attestations(manifest_data)
+        
+        all_valid = all(is_valid for _, is_valid, _ in results)
+        
+        output_lines = []
+        for i, is_valid, error in results:
+            att = attestations[i]
+            status = "[green]✓ VALID[/green]" if is_valid else f"[red]✗ INVALID[/red] ({error})"
+            output_lines.append(
+                f"  {i+1}. [{att.get('type', 'unknown')}] {att.get('verifier', 'unknown')}: {status}"
+            )
+        
+        if all_valid:
+            console.print(Panel(
+                f"[green]✓[/green] All {len(attestations)} attestation(s) are valid\n\n" +
+                "\n".join(output_lines),
+                title="Attestations Verified",
+                border_style="green"
+            ))
+        else:
+            console.print(Panel(
+                f"[red]✗[/red] Some attestations failed verification\n\n" +
+                "\n".join(output_lines),
+                title="Verification Failed",
+                border_style="red"
+            ))
+            raise SystemExit(1)
+            
+    except Exception as e:
+        console.print(f"[red]Error verifying attestations:[/red] {e}")
+        raise SystemExit(1)
 
 
 # =============================================================================

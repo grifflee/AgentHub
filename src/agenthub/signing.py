@@ -346,3 +346,155 @@ def verify_manifest_data(manifest_data: dict) -> Tuple[bool, Optional[str]]:
         return True, None
     else:
         return False, "Invalid signature"
+
+
+# =============================================================================
+# Attestation Signing & Verification
+# =============================================================================
+
+def get_attestation_signable_content(attestation_data: dict) -> str:
+    """
+    Get the canonical content to sign for an attestation.
+    
+    Excludes signature field to allow verification after signing.
+    
+    Args:
+        attestation_data: Attestation dictionary
+        
+    Returns:
+        Canonical string representation for signing
+    """
+    # Fields to exclude from signature
+    exclude_fields = {"signature", "public_key"}
+    
+    # Create a copy without signature fields
+    signable = {k: v for k, v in attestation_data.items() if k not in exclude_fields}
+    
+    # Use JSON with sorted keys for deterministic output
+    return json.dumps(signable, sort_keys=True, default=str)
+
+
+def sign_attestation(
+    attestation_type: str,
+    verifier: str,
+    statement: str,
+    verifier_id: Optional[str] = None,
+    metadata: Optional[dict] = None
+) -> dict:
+    """
+    Create and sign a new attestation.
+    
+    Args:
+        attestation_type: Type of attestation (build, test, security, review, registry)
+        verifier: Name of entity creating the attestation
+        statement: Human-readable statement of what was verified
+        verifier_id: Optional URI or identifier for the verifier
+        metadata: Optional additional metadata
+        
+    Returns:
+        Signed attestation dictionary ready to add to manifest
+    """
+    check_cryptography_available()
+    
+    # Load keys
+    private_key = load_private_key()
+    public_key = private_key.public_key()
+    
+    # Build attestation
+    attestation = {
+        "type": attestation_type,
+        "verifier": verifier,
+        "statement": statement,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    
+    if verifier_id:
+        attestation["verifier_id"] = verifier_id
+    
+    if metadata:
+        attestation["metadata"] = metadata
+    
+    # Get content to sign
+    signable_content = get_attestation_signable_content(attestation)
+    
+    # Sign
+    attestation["signature"] = sign_content(signable_content, private_key)
+    attestation["public_key"] = get_public_key_base64(public_key)
+    
+    return attestation
+
+
+def verify_attestation(attestation_data: dict) -> Tuple[bool, Optional[str]]:
+    """
+    Verify a single attestation's signature.
+    
+    Args:
+        attestation_data: Attestation dictionary
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    signature = attestation_data.get("signature")
+    public_key = attestation_data.get("public_key")
+    
+    if not signature:
+        return False, "Attestation is not signed"
+    
+    if not public_key:
+        return False, "Attestation missing public_key"
+    
+    signable_content = get_attestation_signable_content(attestation_data)
+    
+    if verify_signature(signable_content, signature, public_key):
+        return True, None
+    else:
+        return False, "Attestation signature invalid"
+
+
+def add_attestation_to_manifest(manifest_path: Path, attestation: dict) -> dict:
+    """
+    Add a signed attestation to a manifest file.
+    
+    Args:
+        manifest_path: Path to the YAML manifest file
+        attestation: Signed attestation dictionary
+        
+    Returns:
+        Updated manifest data
+    """
+    # Load the manifest
+    with open(manifest_path, "r") as f:
+        manifest_data = yaml.safe_load(f)
+    
+    # Initialize attestations list if not present
+    if "attestations" not in manifest_data:
+        manifest_data["attestations"] = []
+    
+    # Add the attestation
+    manifest_data["attestations"].append(attestation)
+    
+    # Write back to file
+    with open(manifest_path, "w") as f:
+        yaml.dump(manifest_data, f, default_flow_style=False, sort_keys=False)
+    
+    return manifest_data
+
+
+def verify_all_attestations(manifest_data: dict) -> list[Tuple[int, bool, Optional[str]]]:
+    """
+    Verify all attestations in a manifest.
+    
+    Args:
+        manifest_data: Parsed manifest dictionary
+        
+    Returns:
+        List of (index, is_valid, error_message) tuples for each attestation
+    """
+    attestations = manifest_data.get("attestations", [])
+    results = []
+    
+    for i, attestation in enumerate(attestations):
+        is_valid, error = verify_attestation(attestation)
+        results.append((i, is_valid, error))
+    
+    return results
