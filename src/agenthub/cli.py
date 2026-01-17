@@ -34,9 +34,10 @@ from .database import (
     update_lifecycle_state,
     delete_agent,
     update_agent_rating,
+    update_badges,
 )
 from .manifest import load_manifest
-from .models import LifecycleState
+from .models import LifecycleState, calculate_execution_level
 from .help import get_template_manifest, open_docs_in_browser
 
 # Rich console for pretty output
@@ -602,15 +603,35 @@ def browse_list(state: str):
         console.print("Use [bold]ah publish register <manifest.yaml>[/bold] to add one.")
         return
     
-    table = Table(title="Registered Agents", box=box.ROUNDED)
+    # Refresh badges for all agents (in case they weren't computed yet)
+    for agent in agents:
+        try:
+            update_badges(agent.name)
+        except Exception:
+            pass  # Continue even if badge update fails
+    
+    # Reload agents to get updated badges
+    agents = list_agents(lifecycle_state=lifecycle)
+    
+    # Sort agents: popular first (has badges), then by rating_count descending
+    agents_sorted = sorted(
+        agents,
+        key=lambda a: (
+            "popular" not in (a.badges or []),  # Popular agents first (False sorts before True)
+            -a.rating_count,  # Then by rating count descending
+        )
+    )
+    
+    table = Table(title="Registered Agents", box=box.ROUNDED, show_lines=True)
     table.add_column("Name", style="cyan", no_wrap=True)
     table.add_column("Version", style="magenta")
     table.add_column("Rating", style="yellow")
+    table.add_column("Badges", style="green")
     table.add_column("State", style="green")
     table.add_column("Capabilities")
     table.add_column("Description")
     
-    for agent in agents:
+    for i, agent in enumerate(agents_sorted):
         state_color = {
             LifecycleState.ACTIVE: "green",
             LifecycleState.DEPRECATED: "yellow",
@@ -629,10 +650,24 @@ def browse_list(state: str):
         else:
             rating_str = "[dim]--[/dim]"
         
+        # Format badges
+        if agent.badges:
+            # Show badges with color coding
+            badge_parts = []
+            for badge in agent.badges:
+                if badge == "popular":
+                    badge_parts.append("[green]● popular[/green]")
+                else:
+                    badge_parts.append(f"[yellow]● {badge}[/yellow]")
+            badges_display = " ".join(badge_parts)
+        else:
+            badges_display = "[dim]--[/dim]"
+        
         table.add_row(
             agent.name,
             agent.version,
             rating_str,
+            badges_display,
             f"[{state_color}]{agent.lifecycle_state.value}[/]",
             caps,
             agent.description[:40] + "..." if len(agent.description) > 40 else agent.description
@@ -709,11 +744,26 @@ def info(name: str):
     else:
         rating_str = "No ratings yet"
     
+    # Calculate execution level
+    execution_level = calculate_execution_level(agent.permissions)
+    exec_level_colors = {
+        "SAFE": "green",
+        "STANDARD": "yellow",
+        "ELEVATED": "orange1",
+        "SYSTEM": "red",
+    }
+    exec_color = exec_level_colors.get(execution_level.value, "white")
+    
+    # Format badges
+    badges_str = ", ".join(agent.badges) if agent.badges else "[dim]none[/dim]"
+    
     console.print(Panel(
         f"[bold cyan]{agent.name}[/bold cyan] v{agent.version}\n"
         f"[dim]by {agent.author}[/dim]\n\n"
         f"{agent.description}\n\n"
         f"[bold]Rating:[/bold] {rating_str}\n"
+        f"[bold]Badges:[/bold] {badges_str}\n"
+        f"[bold]Execution Level:[/bold] [{exec_color}]{execution_level.value}[/]\n"
         f"[bold]Lifecycle State:[/bold] [{state_color}]{agent.lifecycle_state.value}[/]\n"
         f"[bold]Capabilities:[/bold] {', '.join(agent.capabilities) or '[dim]none[/dim]'}\n"
         f"[bold]Protocols:[/bold] {', '.join(p.value for p in agent.protocols) or '[dim]none[/dim]'}\n"

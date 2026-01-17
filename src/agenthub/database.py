@@ -54,6 +54,7 @@ def init_database() -> None:
                 rating_sum INTEGER NOT NULL DEFAULT 0,
                 rating_count INTEGER NOT NULL DEFAULT 0,
                 download_count INTEGER NOT NULL DEFAULT 0,
+                badges TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -71,7 +72,96 @@ def init_database() -> None:
             except sqlite3.OperationalError:
                 pass  # Column already exists
         
+        # Migration: Add badges column if it doesn't exist
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN badges TEXT DEFAULT '[]'")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        
         conn.commit()
+    finally:
+        conn.close()
+
+
+def compute_badges(download_count: int, rating_count: int, rating_sum: int) -> list[str]:
+    """
+    Compute badges for an agent based on quality signals.
+    
+    Args:
+        download_count: Number of downloads
+        rating_count: Number of ratings
+        rating_sum: Sum of all ratings
+        
+    Returns:
+        List of badge names
+    """
+    badges = []
+    
+    # Popular badge: >10 downloads OR >10 ratings
+    if download_count > 10 or rating_count > 10:
+        badges.append("popular")
+    
+    # Future badges can be added here:
+    # - "verified": Has behavioral test evidence
+    # - "security-audited": Has security attestation
+    # - "well-documented": Documentation completeness score
+    # - "highly-rated": Average rating > 4.5 with >5 ratings
+    
+    return badges
+
+
+def update_badges(name: str) -> list[str]:
+    """
+    Update and persist badges for an agent based on current metrics.
+    
+    Args:
+        name: Agent name
+        
+    Returns:
+        Updated list of badges
+        
+    Raises:
+        ValueError: If agent not found
+    """
+    # Remote API mode
+    if is_remote_mode():
+        from . import api_client
+        # For now, badges are computed server-side
+        # This could call an API endpoint if we add one
+        agent = get_agent(name)
+        if not agent:
+            raise ValueError(f"Agent '{name}' not found")
+        badges = compute_badges(agent.download_count, agent.rating_count, agent.rating_sum)
+        return badges
+    
+    # Local SQLite mode
+    conn = get_connection()
+    now = datetime.utcnow().isoformat()
+    
+    try:
+        # Get current metrics
+        row = conn.execute(
+            "SELECT download_count, rating_count, rating_sum FROM agents WHERE name = ?",
+            (name,)
+        ).fetchone()
+        
+        if not row:
+            raise ValueError(f"Agent '{name}' not found")
+        
+        # Compute badges
+        badges = compute_badges(row["download_count"], row["rating_count"], row["rating_sum"])
+        
+        # Update database
+        conn.execute(
+            """
+            UPDATE agents 
+            SET badges = ?, updated_at = ?
+            WHERE name = ?
+            """,
+            (json.dumps(badges), now, name)
+        )
+        conn.commit()
+        return badges
     finally:
         conn.close()
 
@@ -106,13 +196,16 @@ def register_agent(record: AgentRecord) -> AgentRecord:
     conn = get_connection()
     now = datetime.utcnow().isoformat()
     
+    # Compute initial badges
+    badges = compute_badges(record.download_count, record.rating_count, record.rating_sum)
+    
     try:
         cursor = conn.execute(
             """
             INSERT INTO agents 
             (name, version, description, author, capabilities, protocols, 
-             permissions, lifecycle_state, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             permissions, lifecycle_state, badges, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record.name,
@@ -123,6 +216,7 @@ def register_agent(record: AgentRecord) -> AgentRecord:
                 json.dumps([p.value for p in record.protocols]),
                 json.dumps(record.permissions),
                 record.lifecycle_state.value,
+                json.dumps(badges),
                 now,
                 now,
             )
@@ -130,6 +224,7 @@ def register_agent(record: AgentRecord) -> AgentRecord:
         conn.commit()
         
         record.id = cursor.lastrowid
+        record.badges = badges
         record.created_at = datetime.fromisoformat(now)
         record.updated_at = datetime.fromisoformat(now)
         return record
@@ -324,13 +419,16 @@ def update_agent_rating(name: str, rating: int) -> tuple[int, int]:
         new_sum = (existing["rating_sum"] or 0) + rating
         new_count = (existing["rating_count"] or 0) + 1
         
+        # Recompute badges (popular badge may change based on rating_count)
+        badges = compute_badges(existing["download_count"] or 0, new_count, new_sum)
+        
         conn.execute(
             """
             UPDATE agents 
-            SET rating_sum = ?, rating_count = ?, updated_at = ?
+            SET rating_sum = ?, rating_count = ?, badges = ?, updated_at = ?
             WHERE name = ?
             """,
-            (new_sum, new_count, now, name)
+            (new_sum, new_count, json.dumps(badges), now, name)
         )
         conn.commit()
         return new_sum, new_count
@@ -355,6 +453,7 @@ def _row_to_record(row: sqlite3.Row) -> AgentRecord:
         rating_sum=row["rating_sum"] if "rating_sum" in keys else 0,
         rating_count=row["rating_count"] if "rating_count" in keys else 0,
         download_count=row["download_count"] if "download_count" in keys else 0,
+        badges=json.loads(row["badges"]) if "badges" in keys else [],
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
@@ -375,6 +474,7 @@ def _dict_to_record(data: dict) -> AgentRecord:
         rating_sum=data.get("rating_sum", 0),
         rating_count=data.get("rating_count", 0),
         download_count=data.get("download_count", 0),
+        badges=data.get("badges", []),
         created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None,
         updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else None,
     )

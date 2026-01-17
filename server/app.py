@@ -18,6 +18,27 @@ CORS(app)  # Allow cross-origin requests from CLI
 init_db()
 
 
+def compute_badges(download_count: int, rating_count: int, rating_sum: int) -> list[str]:
+    """
+    Compute badges for an agent based on quality signals.
+    
+    Args:
+        download_count: Number of downloads
+        rating_count: Number of ratings
+        rating_sum: Sum of all ratings
+        
+    Returns:
+        List of badge names
+    """
+    badges = []
+    
+    # Popular badge: >10 downloads OR >10 ratings
+    if download_count > 10 or rating_count > 10:
+        badges.append("popular")
+    
+    return badges
+
+
 # ============================================================================
 # Health Check
 # ============================================================================
@@ -57,6 +78,13 @@ def register_agent():
         if existing:
             return jsonify({"error": f"Agent '{data['name']}' already exists"}), 409
         
+        # Compute initial badges
+        badges = compute_badges(
+            data.get("download_count", 0),
+            data.get("rating_count", 0),
+            data.get("rating_sum", 0)
+        )
+        
         # Create new agent
         agent = Agent(
             name=data["name"],
@@ -67,6 +95,7 @@ def register_agent():
             protocols=json.dumps(data.get("protocols", [])),
             permissions=json.dumps(data.get("permissions", [])),
             lifecycle_state=data.get("lifecycle_state", LifecycleState.ACTIVE.value),
+            badges=json.dumps(badges),
         )
         
         db.add(agent)
@@ -190,13 +219,19 @@ def rate_agent(name: str):
         
         agent.rating_sum += rating
         agent.rating_count += 1
+        
+        # Recompute badges (in case future badges depend on ratings)
+        badges = compute_badges(agent.download_count, agent.rating_count, agent.rating_sum)
+        agent.badges = json.dumps(badges)
+        
         db.commit()
         db.refresh(agent)
         
         return jsonify({
             "rating_sum": agent.rating_sum,
             "rating_count": agent.rating_count,
-            "average": agent.rating_sum / agent.rating_count
+            "average": agent.rating_sum / agent.rating_count,
+            "badges": badges
         })
         
     except Exception as e:
