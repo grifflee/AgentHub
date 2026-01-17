@@ -36,6 +36,73 @@ class Protocol(str, Enum):
     CUSTOM = "custom"
 
 
+class AttestationType(str, Enum):
+    """
+    Types of attestations for SLSA-style provenance (§3.2.5).
+    
+    Based on SLSA v1.1 Verification Summary Attestation (VSA) concepts.
+    These provide structured, signed evidence of checks performed on agents.
+    """
+    BUILD = "build"              # Attestation about how agent was built
+    TEST = "test"                # Attestation that tests passed
+    SECURITY_SCAN = "security"   # Attestation from security scanner
+    CODE_REVIEW = "review"       # Attestation from human/automated review
+    REGISTRY_CHECK = "registry"  # Attestation from registry admission
+    CUSTOM = "custom"            # Custom attestation type
+
+
+class Attestation(BaseModel):
+    """
+    A single attestation providing verifiable evidence about an agent.
+    
+    SLSA-style attestations enable third-party verification of claims.
+    Each attestation is signed by its verifier (CI system, auditor, etc.)
+    
+    Example:
+        Attestation(
+            type=AttestationType.TEST,
+            verifier="github-actions",
+            verifier_id="https://github.com/griffen-lee/.github-actions",
+            statement="All 47 tests passed on commit abc123",
+            timestamp="2026-01-17T10:00:00Z",
+            signature="base64-signature...",
+            public_key="base64-verifier-public-key..."
+        )
+    """
+    type: AttestationType = Field(
+        ...,
+        description="Type of attestation"
+    )
+    verifier: str = Field(
+        ...,
+        description="Name of entity that created this attestation (e.g., 'github-actions', 'snyk')"
+    )
+    verifier_id: Optional[str] = Field(
+        default=None,
+        description="URI or identifier for the verifier"
+    )
+    statement: str = Field(
+        ...,
+        description="Human-readable statement of what was verified"
+    )
+    timestamp: Optional[datetime] = Field(
+        default=None,
+        description="When the attestation was created"
+    )
+    signature: Optional[str] = Field(
+        default=None,
+        description="Base64-encoded signature from the verifier (optional until signing is implemented)"
+    )
+    public_key: Optional[str] = Field(
+        default=None,
+        description="Base64-encoded public key of the verifier"
+    )
+    metadata: Optional[dict] = Field(
+        default=None,
+        description="Additional metadata (commit hash, test count, etc.)"
+    )
+
+
 class AgentManifest(BaseModel):
     """
     The core agent manifest schema.
@@ -89,6 +156,27 @@ class AgentManifest(BaseModel):
     lifecycle_state: LifecycleState = Field(
         default=LifecycleState.ACTIVE,
         description="Current lifecycle state"
+    )
+    
+    # Trust & Provenance (§3.2.5)
+    # Basic author signing (Phase 2)
+    signature: Optional[str] = Field(
+        default=None,
+        description="Base64-encoded Ed25519 signature of manifest content"
+    )
+    public_key: Optional[str] = Field(
+        default=None,
+        description="Base64-encoded Ed25519 public key of the author"
+    )
+    signed_at: Optional[datetime] = Field(
+        default=None,
+        description="When the manifest was signed"
+    )
+    
+    # SLSA-style attestations (Phase 2.5 - schema only for now)
+    attestations: list[Attestation] = Field(
+        default_factory=list,
+        description="List of third-party attestations (build, test, security, etc.)"
     )
     
     # Metadata

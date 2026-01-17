@@ -1,0 +1,72 @@
+# Advanced Agent Manifest Example
+# Demonstrates trust/provenance features including signing and attestations
+
+name: secure-code-reviewer
+version: 2.0.0
+description: A security-focused code review agent with verified provenance
+author: griffen-lee
+
+# Capabilities
+capabilities:
+  - code-review
+  - security-analysis
+  - vulnerability-detection
+  - dependency-audit
+
+# Protocols
+protocols:
+  - MCP
+  - A2A
+
+# Permissions
+permissions:
+  - read-files
+  - network-access
+
+# Trust & Provenance (Phase 2)
+# These fields are populated by `agenthub sign` command
+signature: null  # Will contain: "base64-ed25519-signature..."
+public_key: null # Will contain: "base64-public-key..."
+signed_at: null  # Will contain: "2026-01-17T11:00:00Z"
+
+# SLSA-Style Attestations (Phase 2.5)
+# Third-party verifiable evidence about this agent
+attestations:
+  - type: build
+    verifier: github-actions
+    verifier_id: https://github.com/griffen-lee/secure-code-reviewer/actions
+    statement: "Built from commit abc123def on main branch"
+    timestamp: "2026-01-15T10:30:00Z"
+    signature: null  # Would be signed by GitHub Actions
+    metadata:
+      commit: abc123def456
+      branch: main
+      workflow: build.yml
+
+  - type: test
+    verifier: pytest-ci
+    statement: "All 127 tests passed (124 unit, 3 integration)"
+    timestamp: "2026-01-15T10:35:00Z"
+    metadata:
+      tests_passed: 127
+      tests_failed: 0
+      coverage: 89.5
+
+  - type: security
+    verifier: snyk
+    verifier_id: https://snyk.io
+    statement: "No critical or high vulnerabilities found"
+    timestamp: "2026-01-15T10:40:00Z"
+    metadata:
+      critical: 0
+      high: 0
+      medium: 2
+      low: 5
+
+  - type: review
+    verifier: human-reviewer
+    statement: "Code reviewed and approved by maintainer"
+    timestamp: "2026-01-16T14:00:00Z"
+    metadata:
+      reviewer: "senior-dev@example.com"
+      approval_type: "full"

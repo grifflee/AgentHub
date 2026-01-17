@@ -1,23 +1,17 @@
-# Sample Agent Manifest for AgentHub
-# This demonstrates the manifest format based on the AgentHub paper
-
 name: code-reviewer
 version: 1.0.0
 description: An AI agent that reviews code for bugs, style issues, and security vulnerabilities
 author: agenthub-team
-
-# Capabilities - what this agent can do (§3.2.1)
 capabilities:
-  - code-review
-  - bug-detection
-  - style-checking
-  - security-analysis
-
-# Protocols - how to communicate with this agent (§3.2.3)
+- code-review
+- bug-detection
+- style-checking
+- security-analysis
 protocols:
-  - MCP
-
-# Permissions - what resources this agent needs (§3.2.1)
+- MCP
 permissions:
-  - read-files
-  - network-access
+- read-files
+- network-access
+signature: iFOQSyv0D/l8PdDhJysYGdX65Jc/nPfRbUrQRedzMqgXKIfM1eNcKsTVEsZT7YUeu2wFl7fNN4VzBZBj2LkuCw==
+public_key: zG8PONudw5ZCuSu9rvgWvdumDMMFCjbu+Jf+bPyGnHU=
+signed_at: '2026-01-17T18:00:54.042588+00:00'

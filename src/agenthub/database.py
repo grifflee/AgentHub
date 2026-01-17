@@ -1,17 +1,25 @@
 """
-SQLite database operations for AgentHub.
+Database operations for AgentHub.
 
-This module handles all database interactions, storing agent records
-in a local SQLite database at ~/.agenthub/registry.db
+This module handles all database interactions. It supports two modes:
+1. LOCAL: SQLite database at ~/.agenthub/registry.db (default)
+2. REMOTE: API calls to the AgentHub server (when AGENTHUB_API_URL is set)
 """
 
 import json
+import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from .models import AgentRecord, LifecycleState
+from .models import AgentRecord, LifecycleState, Protocol
+
+
+def is_remote_mode() -> bool:
+    """Check if we're using the remote API."""
+    return bool(os.environ.get("AGENTHUB_API_URL"))
+
 
 
 def get_db_path() -> Path:
@@ -65,6 +73,26 @@ def register_agent(record: AgentRecord) -> AgentRecord:
     Raises:
         ValueError: If an agent with the same name already exists
     """
+    # Remote API mode
+    if is_remote_mode():
+        from . import api_client
+        data = {
+            "name": record.name,
+            "version": record.version,
+            "description": record.description,
+            "author": record.author,
+            "capabilities": record.capabilities,
+            "protocols": [p.value for p in record.protocols],
+            "permissions": record.permissions,
+            "lifecycle_state": record.lifecycle_state.value,
+        }
+        result = api_client.register_agent(data)
+        record.id = result.get("id")
+        record.created_at = datetime.fromisoformat(result["created_at"]) if result.get("created_at") else None
+        record.updated_at = datetime.fromisoformat(result["updated_at"]) if result.get("updated_at") else None
+        return record
+    
+    # Local SQLite mode
     conn = get_connection()
     now = datetime.utcnow().isoformat()
     
@@ -104,6 +132,15 @@ def register_agent(record: AgentRecord) -> AgentRecord:
 
 def get_agent(name: str) -> Optional[AgentRecord]:
     """Get an agent by name."""
+    # Remote API mode
+    if is_remote_mode():
+        from . import api_client
+        result = api_client.get_agent(name)
+        if result is None:
+            return None
+        return _dict_to_record(result)
+    
+    # Local SQLite mode
     conn = get_connection()
     try:
         row = conn.execute(
@@ -123,6 +160,14 @@ def list_agents(
     limit: int = 100
 ) -> list[AgentRecord]:
     """List all agents, optionally filtered by lifecycle state."""
+    # Remote API mode
+    if is_remote_mode():
+        from . import api_client
+        state_value = lifecycle_state.value if lifecycle_state else None
+        results = api_client.list_agents(state_value, limit)
+        return [_dict_to_record(r) for r in results]
+    
+    # Local SQLite mode
     conn = get_connection()
     try:
         if lifecycle_state:
@@ -191,6 +236,12 @@ def update_lifecycle_state(name: str, state: LifecycleState) -> bool:
     
     This supports the lifecycle transparency requirement (§3.2.2).
     """
+    # Remote API mode
+    if is_remote_mode():
+        from . import api_client
+        return api_client.update_lifecycle_state(name, state.value)
+    
+    # Local SQLite mode
     conn = get_connection()
     now = datetime.utcnow().isoformat()
     
@@ -211,6 +262,12 @@ def update_lifecycle_state(name: str, state: LifecycleState) -> bool:
 
 def delete_agent(name: str) -> bool:
     """Delete an agent from the registry."""
+    # Remote API mode
+    if is_remote_mode():
+        from . import api_client
+        return api_client.delete_agent(name)
+    
+    # Local SQLite mode
     conn = get_connection()
     try:
         cursor = conn.execute("DELETE FROM agents WHERE name = ?", (name,))
@@ -222,8 +279,6 @@ def delete_agent(name: str) -> bool:
 
 def _row_to_record(row: sqlite3.Row) -> AgentRecord:
     """Convert a database row to an AgentRecord."""
-    from .models import Protocol
-    
     return AgentRecord(
         id=row["id"],
         name=row["name"],
@@ -236,4 +291,21 @@ def _row_to_record(row: sqlite3.Row) -> AgentRecord:
         lifecycle_state=LifecycleState(row["lifecycle_state"]),
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+def _dict_to_record(data: dict) -> AgentRecord:
+    """Convert an API response dict to an AgentRecord."""
+    return AgentRecord(
+        id=data.get("id"),
+        name=data["name"],
+        version=data["version"],
+        description=data["description"],
+        author=data["author"],
+        capabilities=data.get("capabilities", []),
+        protocols=[Protocol(p) for p in data.get("protocols", [])],
+        permissions=data.get("permissions", []),
+        lifecycle_state=LifecycleState(data.get("lifecycle_state", "active")),
+        created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None,
+        updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else None,
     )

@@ -1,0 +1,348 @@
+"""
+Cryptographic signing for AgentHub manifests.
+
+This module provides Ed25519 signing and verification for agent manifests,
+enabling trust and provenance verification as described in the AgentHub paper (§3.2.5).
+
+Usage:
+    # Generate keypair (one-time setup)
+    from agenthub.signing import generate_keypair, save_keypair
+    private_key, public_key = generate_keypair()
+    save_keypair(private_key, public_key)
+    
+    # Sign a manifest
+    from agenthub.signing import sign_manifest_file
+    sign_manifest_file(Path("my-agent.yaml"))
+    
+    # Verify a signature
+    from agenthub.signing import verify_manifest_file
+    is_valid = verify_manifest_file(Path("my-agent.yaml"))
+"""
+
+import base64
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional, Tuple
+
+import yaml
+
+try:
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey,
+        Ed25519PublicKey,
+    )
+    from cryptography.hazmat.primitives import serialization
+    CRYPTOGRAPHY_AVAILABLE = True
+except ImportError:
+    CRYPTOGRAPHY_AVAILABLE = False
+    Ed25519PrivateKey = None
+    Ed25519PublicKey = None
+
+
+def get_agenthub_dir() -> Path:
+    """Get the AgentHub config directory (~/.agenthub)."""
+    agenthub_dir = Path.home() / ".agenthub"
+    agenthub_dir.mkdir(exist_ok=True)
+    return agenthub_dir
+
+
+def get_keys_dir() -> Path:
+    """Get the keys directory (~/.agenthub/keys)."""
+    keys_dir = get_agenthub_dir() / "keys"
+    keys_dir.mkdir(exist_ok=True)
+    return keys_dir
+
+
+def check_cryptography_available() -> None:
+    """Raise an error if cryptography library is not installed."""
+    if not CRYPTOGRAPHY_AVAILABLE:
+        raise ImportError(
+            "The 'cryptography' library is required for signing.\n"
+            "Install it with: pip install cryptography>=41.0"
+        )
+
+
+# =============================================================================
+# Key Generation
+# =============================================================================
+
+def generate_keypair() -> Tuple[bytes, bytes]:
+    """
+    Generate a new Ed25519 keypair.
+    
+    Returns:
+        Tuple of (private_key_pem, public_key_pem) as bytes
+    """
+    check_cryptography_available()
+    
+    # Generate private key
+    private_key = Ed25519PrivateKey.generate()
+    
+    # Serialize private key to PEM format
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption()
+    )
+    
+    # Get public key and serialize
+    public_key = private_key.public_key()
+    public_pem = public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    
+    return private_pem, public_pem
+
+
+def save_keypair(private_pem: bytes, public_pem: bytes) -> Path:
+    """
+    Save a keypair to ~/.agenthub/keys/.
+    
+    Args:
+        private_pem: Private key in PEM format
+        public_pem: Public key in PEM format
+        
+    Returns:
+        Path to keys directory
+    """
+    keys_dir = get_keys_dir()
+    
+    private_path = keys_dir / "private.pem"
+    public_path = keys_dir / "public.pem"
+    
+    # Write private key with restricted permissions
+    private_path.write_bytes(private_pem)
+    private_path.chmod(0o600)  # Read/write for owner only
+    
+    # Write public key
+    public_path.write_bytes(public_pem)
+    
+    return keys_dir
+
+
+def load_private_key() -> "Ed25519PrivateKey":
+    """Load the private key from ~/.agenthub/keys/private.pem."""
+    check_cryptography_available()
+    
+    private_path = get_keys_dir() / "private.pem"
+    
+    if not private_path.exists():
+        raise FileNotFoundError(
+            f"Private key not found at {private_path}\n"
+            "Run 'agenthub keygen' to generate a keypair."
+        )
+    
+    private_pem = private_path.read_bytes()
+    return serialization.load_pem_private_key(private_pem, password=None)
+
+
+def load_public_key() -> "Ed25519PublicKey":
+    """Load the public key from ~/.agenthub/keys/public.pem."""
+    check_cryptography_available()
+    
+    public_path = get_keys_dir() / "public.pem"
+    
+    if not public_path.exists():
+        raise FileNotFoundError(
+            f"Public key not found at {public_path}\n"
+            "Run 'agenthub keygen' to generate a keypair."
+        )
+    
+    public_pem = public_path.read_bytes()
+    return serialization.load_pem_public_key(public_pem)
+
+
+def has_keypair() -> bool:
+    """Check if a keypair exists."""
+    keys_dir = get_keys_dir()
+    return (keys_dir / "private.pem").exists() and (keys_dir / "public.pem").exists()
+
+
+# =============================================================================
+# Signing
+# =============================================================================
+
+def get_signable_content(manifest_data: dict) -> str:
+    """
+    Get the canonical content to sign from a manifest.
+    
+    Excludes signature-related fields to allow verification after signing.
+    Uses JSON for deterministic serialization.
+    
+    Args:
+        manifest_data: Parsed manifest dictionary
+        
+    Returns:
+        Canonical string representation for signing
+    """
+    # Fields to exclude from signature (they're added after signing)
+    exclude_fields = {"signature", "public_key", "signed_at"}
+    
+    # Create a copy without signature fields
+    signable = {k: v for k, v in manifest_data.items() if k not in exclude_fields}
+    
+    # Use JSON with sorted keys for deterministic output
+    return json.dumps(signable, sort_keys=True, default=str)
+
+
+def sign_content(content: str, private_key: "Ed25519PrivateKey") -> str:
+    """
+    Sign content with a private key.
+    
+    Args:
+        content: String content to sign
+        private_key: Ed25519 private key
+        
+    Returns:
+        Base64-encoded signature
+    """
+    signature_bytes = private_key.sign(content.encode("utf-8"))
+    return base64.b64encode(signature_bytes).decode("ascii")
+
+
+def get_public_key_base64(public_key: "Ed25519PublicKey") -> str:
+    """Get the base64-encoded raw public key bytes."""
+    raw_bytes = public_key.public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw
+    )
+    return base64.b64encode(raw_bytes).decode("ascii")
+
+
+def sign_manifest_file(manifest_path: Path) -> dict:
+    """
+    Sign a manifest file in-place.
+    
+    Adds signature, public_key, and signed_at fields to the manifest.
+    
+    Args:
+        manifest_path: Path to the YAML manifest file
+        
+    Returns:
+        The updated manifest data
+    """
+    check_cryptography_available()
+    
+    # Load the manifest
+    with open(manifest_path, "r") as f:
+        manifest_data = yaml.safe_load(f)
+    
+    # Load keys
+    private_key = load_private_key()
+    public_key = private_key.public_key()
+    
+    # Get content to sign (excluding existing signature fields)
+    signable_content = get_signable_content(manifest_data)
+    
+    # Sign the content
+    signature = sign_content(signable_content, private_key)
+    
+    # Add signature fields to manifest
+    manifest_data["signature"] = signature
+    manifest_data["public_key"] = get_public_key_base64(public_key)
+    manifest_data["signed_at"] = datetime.now(timezone.utc).isoformat()
+    
+    # Write back to file
+    with open(manifest_path, "w") as f:
+        yaml.dump(manifest_data, f, default_flow_style=False, sort_keys=False)
+    
+    return manifest_data
+
+
+# =============================================================================
+# Verification
+# =============================================================================
+
+def verify_signature(content: str, signature_b64: str, public_key_b64: str) -> bool:
+    """
+    Verify a signature against content.
+    
+    Args:
+        content: The original signed content
+        signature_b64: Base64-encoded signature
+        public_key_b64: Base64-encoded raw public key
+        
+    Returns:
+        True if valid, False otherwise
+    """
+    check_cryptography_available()
+    
+    try:
+        # Decode signature and public key
+        signature_bytes = base64.b64decode(signature_b64)
+        public_key_bytes = base64.b64decode(public_key_b64)
+        
+        # Reconstruct public key from raw bytes
+        public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes)
+        
+        # Verify (raises InvalidSignature on failure)
+        public_key.verify(signature_bytes, content.encode("utf-8"))
+        return True
+        
+    except Exception:
+        return False
+
+
+def verify_manifest_file(manifest_path: Path) -> Tuple[bool, Optional[str]]:
+    """
+    Verify a signed manifest file.
+    
+    Args:
+        manifest_path: Path to the YAML manifest file
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+        If valid: (True, None)
+        If invalid: (False, "reason")
+    """
+    # Load the manifest
+    with open(manifest_path, "r") as f:
+        manifest_data = yaml.safe_load(f)
+    
+    # Check for signature fields
+    signature = manifest_data.get("signature")
+    public_key = manifest_data.get("public_key")
+    
+    if not signature:
+        return False, "Manifest is not signed (no signature field)"
+    
+    if not public_key:
+        return False, "Manifest is missing public_key field"
+    
+    # Get the content that was signed
+    signable_content = get_signable_content(manifest_data)
+    
+    # Verify
+    if verify_signature(signable_content, signature, public_key):
+        return True, None
+    else:
+        return False, "Signature verification failed - manifest may have been tampered with"
+
+
+def verify_manifest_data(manifest_data: dict) -> Tuple[bool, Optional[str]]:
+    """
+    Verify a manifest from a dictionary (already parsed).
+    
+    Args:
+        manifest_data: Parsed manifest dictionary
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    signature = manifest_data.get("signature")
+    public_key = manifest_data.get("public_key")
+    
+    if not signature:
+        return False, "Manifest is not signed"
+    
+    if not public_key:
+        return False, "Missing public key"
+    
+    signable_content = get_signable_content(manifest_data)
+    
+    if verify_signature(signable_content, signature, public_key):
+        return True, None
+    else:
+        return False, "Invalid signature"

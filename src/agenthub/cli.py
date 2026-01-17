@@ -52,6 +52,8 @@ def main():
     research paper, supporting capability-based discovery and lifecycle
     management.
     
+    Tip: Use 'ah' as a shortcut alias (e.g., 'ah list' instead of 'agenthub list')
+    
     GitHub: https://github.com/grifflee/AgentHub
     """
     # Initialize database on every command
@@ -94,6 +96,180 @@ def init(name: str, edit: bool):
     if edit:
         import subprocess
         subprocess.run(['open', '-e', str(path)])
+
+
+# =============================================================================
+# Trust & Signing Commands (grouped under 'agenthub trust')
+# =============================================================================
+
+@main.group()
+def trust():
+    """Trust and signing commands for manifest verification.
+    
+    These commands manage cryptographic signing for agent manifests,
+    enabling trust and provenance verification.
+    
+    \b
+    Workflow:
+      1. agenthub trust keygen     Generate your signing keypair (once)
+      2. agenthub trust sign       Sign a manifest before registering
+      3. agenthub trust verify     Verify a signed manifest
+    
+    Example:
+        agenthub trust keygen
+        agenthub trust sign my-agent.yaml
+        agenthub trust verify my-agent.yaml
+    """
+    pass
+
+
+@trust.command()
+def keygen():
+    """Generate a new Ed25519 signing keypair.
+    
+    Creates a keypair in ~/.agenthub/keys/ for signing agent manifests.
+    The private key is kept secure on your machine; the public key is
+    embedded in signed manifests for verification.
+    
+    Example:
+        agenthub trust keygen
+    """
+    from .signing import generate_keypair, save_keypair, has_keypair, get_keys_dir
+    
+    if has_keypair():
+        console.print(Panel(
+            f"[yellow]⚠[/yellow] A keypair already exists at [bold]{get_keys_dir()}[/bold]\n\n"
+            "[dim]To generate a new keypair, first delete the existing keys.[/dim]",
+            title="Keypair Exists",
+            border_style="yellow"
+        ))
+        return
+    
+    try:
+        private_pem, public_pem = generate_keypair()
+        keys_dir = save_keypair(private_pem, public_pem)
+        
+        console.print(Panel(
+            f"[green]✓[/green] Generated Ed25519 keypair\n\n"
+            f"[bold]Location:[/bold] {keys_dir}\n"
+            f"  • private.pem [dim](keep this secret!)[/dim]\n"
+            f"  • public.pem\n\n"
+            f"[dim]Next: Sign a manifest with [bold]agenthub trust sign manifest.yaml[/bold][/dim]",
+            title="Keypair Generated",
+            border_style="green"
+        ))
+    except ImportError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise SystemExit(1)
+
+
+@trust.command()
+@click.argument('manifest_path', type=click.Path(exists=True))
+def sign(manifest_path: str):
+    """Sign an agent manifest with your private key.
+    
+    This adds signature, public_key, and signed_at fields to the manifest.
+    You must first run 'agenthub trust keygen' to generate a keypair.
+    
+    Example:
+        agenthub trust sign my-agent.yaml
+    """
+    from .signing import sign_manifest_file, has_keypair
+    
+    if not has_keypair():
+        console.print(Panel(
+            "[red]✗[/red] No keypair found.\n\n"
+            "Run [bold]agenthub trust keygen[/bold] first to generate a signing keypair.",
+            title="No Keypair",
+            border_style="red"
+        ))
+        raise SystemExit(1)
+    
+    try:
+        path = Path(manifest_path)
+        manifest_data = sign_manifest_file(path)
+        
+        console.print(Panel(
+            f"[green]✓[/green] Signed [bold]{path.name}[/bold]\n\n"
+            f"[bold]Signature:[/bold] {manifest_data['signature'][:40]}...\n"
+            f"[bold]Signed at:[/bold] {manifest_data['signed_at']}\n\n"
+            f"[dim]The manifest has been updated in-place with signature fields.[/dim]",
+            title="Manifest Signed",
+            border_style="green"
+        ))
+    except FileNotFoundError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise SystemExit(1)
+    except Exception as e:
+        console.print(f"[red]Error signing manifest:[/red] {e}")
+        raise SystemExit(1)
+
+
+@trust.command()
+@click.argument('manifest_path', type=click.Path(exists=True))
+def verify(manifest_path: str):
+    """Verify the signature of a signed manifest.
+    
+    Checks that the manifest's signature is valid and matches the content.
+    
+    Example:
+        agenthub trust verify my-agent.yaml
+    """
+    from .signing import verify_manifest_file
+    
+    try:
+        path = Path(manifest_path)
+        is_valid, error_msg = verify_manifest_file(path)
+        
+        if is_valid:
+            console.print(Panel(
+                f"[green]✓[/green] Signature is [bold green]VALID[/bold green]\n\n"
+                f"[dim]The manifest [bold]{path.name}[/bold] has not been tampered with.[/dim]",
+                title="Verification Passed",
+                border_style="green"
+            ))
+        else:
+            console.print(Panel(
+                f"[red]✗[/red] Signature is [bold red]INVALID[/bold red]\n\n"
+                f"[bold]Reason:[/bold] {error_msg}",
+                title="Verification Failed",
+                border_style="red"
+            ))
+            raise SystemExit(1)
+    except Exception as e:
+        console.print(f"[red]Error verifying manifest:[/red] {e}")
+        raise SystemExit(1)
+
+
+@trust.command()
+def status():
+    """Show the current trust configuration status.
+    
+    Displays whether you have a keypair and its location.
+    
+    Example:
+        agenthub trust status
+    """
+    from .signing import has_keypair, get_keys_dir
+    
+    keys_dir = get_keys_dir()
+    
+    if has_keypair():
+        console.print(Panel(
+            f"[green]✓[/green] Keypair configured\n\n"
+            f"[bold]Location:[/bold] {keys_dir}\n"
+            f"  • private.pem [dim](keep this secret!)[/dim]\n"
+            f"  • public.pem",
+            title="Trust Status",
+            border_style="green"
+        ))
+    else:
+        console.print(Panel(
+            f"[yellow]⚠[/yellow] No keypair found\n\n"
+            f"[dim]Run [bold]agenthub trust keygen[/bold] to create a signing keypair.[/dim]",
+            title="Trust Status",
+            border_style="yellow"
+        ))
 
 
 @main.command()
