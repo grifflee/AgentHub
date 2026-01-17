@@ -69,11 +69,12 @@ def all_commands():
     commands = """
 [bold #45c1ff]AGENTHUB - COMPLETE COMMAND REFERENCE[/bold #45c1ff]
 
-[bold]DISCOVERY COMMANDS[/bold]
-  ah list                           List all registered agents
-  ah list --state active            Filter by lifecycle state
-  ah search                         Launch Agent Interviewer
-  ah rate <agent> <1-5>             Rate an agent (1-5 stars)
+[bold]BROWSE COMMANDS[/bold]  (ah browse --help)
+  ah browse list                    List all registered agents
+  ah browse list --state active     Filter by lifecycle state
+  ah browse search                  Launch Agent Interviewer
+  ah browse info <name>             Show detailed agent info
+  ah browse rate <name> <1-5>       Rate an agent (1-5 stars)
 
 [bold]PUBLISHING COMMANDS[/bold]  (ah publish --help)
   ah publish init <name>            Create a manifest template
@@ -94,7 +95,6 @@ def all_commands():
 [bold]UTILITY COMMANDS[/bold]  (hidden from main help)
   ah example-manifest               Show example manifest inline
   ah lineage <agent>                Show fork ancestry tree
-  ah info <agent>                   Show detailed agent info
 
 [bold]OPTIONS[/bold]
   ah --version                      Show version number
@@ -568,17 +568,37 @@ def example_manifest():
 
 
 
-@main.command('list')
+# =============================================================================
+# Browse Commands (grouped under 'ah browse')
+# =============================================================================
+
+@main.group()
+def browse():
+    """Discover, explore, and rate agents in the registry.
+    
+    Use these commands to find and evaluate agents.
+    
+    \b
+    Commands:
+      ah browse list                  List all registered agents
+      ah browse search                Launch Agent Interviewer
+      ah browse info <name>           Show detailed agent info
+      ah browse rate <name> <1-5>     Rate an agent
+    """
+    pass
+
+
+@browse.command('list')
 @click.option('--state', type=click.Choice(['active', 'deprecated', 'retired', 'revoked']),
               help='Filter by lifecycle state')
-def list_cmd(state: str):
+def browse_list(state: str):
     """List all registered agents."""
     lifecycle = LifecycleState(state) if state else None
     agents = list_agents(lifecycle_state=lifecycle)
     
     if not agents:
         console.print("[dim]No agents registered yet.[/dim]")
-        console.print("Use [bold]agenthub register <manifest.yaml>[/bold] to add one.")
+        console.print("Use [bold]ah publish register <manifest.yaml>[/bold] to add one.")
         return
     
     table = Table(title="Registered Agents", box=box.ROUNDED)
@@ -609,68 +629,53 @@ def list_cmd(state: str):
         )
     
     console.print(table)
-    
-    # Display available commands
     console.print()
-    commands_panel = Panel(
-        "[bold #45c1ff]agenthub info <name>[/]      Show detailed information about an agent\n"
-        "[bold #45c1ff]agenthub search[/]           Launch Agent Interviewer to find agents\n"
-        "[bold #45c1ff]agenthub deprecate <name>[/] Mark an agent as deprecated\n"
-        "[bold #45c1ff]agenthub remove <name>[/]    Remove an agent from the registry\n"
-        "[bold #45c1ff]agenthub register <file>[/]  Register a new agent from manifest",
-        title="[bold]Available Commands[/]",
-        border_style="#45c1ff",
-        box=box.ROUNDED
-    )
-    console.print(commands_panel)
+    console.print("[dim]Tip: Use [bold]ah browse info <name>[/bold] for details, or [bold]ah browse rate <name> <1-5>[/bold] to rate.[/dim]")
 
 
-@main.command()
+@browse.command()
 def search():
     """Launch the Agent Interviewer to find agents for your task."""
     agents = list_agents()
     
     if not agents:
         console.print("[dim]No agents registered yet.[/dim]")
-        console.print("Use [bold]agenthub register <manifest.yaml>[/bold] to add one.")
+        console.print("Use [bold]ah publish register <manifest.yaml>[/bold] to add one.")
         return
     
-    # Display the Agent Interviewer header
     console.print()
     console.print(Panel(
         "[bold]Welcome to the Agent Interviewer[/bold]\n\n"
         "[dim]This intelligent discovery system helps you find the right agent for your task.\n"
         "Describe what you need, and the interviewer will analyze registered agents\n"
         "to recommend the best match based on capabilities and behavioral evidence.[/dim]\n\n"
-        "[yellow]⚠ Coming Soon:[/yellow] A fine-tuned model will be integrated here to:\n"
-        "  • Understand your task requirements through conversation\n"
-        "  • Query agents about their capabilities\n"
-        "  • Evaluate agents using structured interviews\n"
-        "  • Provide ranked recommendations with explanations",
-        title="[bold #45c1ff]🔍 Agent Interviewer[/bold #45c1ff]",
+        "[yellow]Coming Soon:[/yellow] A fine-tuned model will be integrated here to:\n"
+        "  - Understand your task requirements through conversation\n"
+        "  - Query agents about their capabilities\n"
+        "  - Evaluate agents using structured interviews\n"
+        "  - Provide ranked recommendations with explanations",
+        title="[bold #45c1ff]Agent Interviewer[/bold #45c1ff]",
         border_style="#45c1ff",
         box=box.ROUNDED
     ))
     
-    # Show currently available agents
     console.print()
     console.print(f"[bold]Registered Agents ({len(agents)} available):[/bold]")
     for agent in agents:
         caps = ", ".join(agent.capabilities[:3])
         if len(agent.capabilities) > 3:
             caps += f" (+{len(agent.capabilities) - 3})"
-        console.print(f"  [cyan]•[/cyan] [bold]{agent.name}[/bold] - {caps}")
+        console.print(f"  [cyan]-[/cyan] [bold]{agent.name}[/bold] - {caps}")
     
-    # Placeholder for future interaction
     console.print()
     console.print(Panel(
         "[dim]Interactive agent discovery is not yet implemented.\n"
-        "For now, use [bold]agenthub info <name>[/bold] to learn more about specific agents.[/dim]",
+        "For now, use [bold]ah browse info <name>[/bold] to learn more about specific agents.[/dim]",
         border_style="dim"
     ))
 
 
-@main.command(hidden=True)
+@browse.command()
 @click.argument('name')
 def info(name: str):
     """Show detailed information about an agent."""
@@ -702,35 +707,28 @@ def info(name: str):
     ))
 
 
-# =============================================================================
-# Quality & Identity Commands (Phase 5)
-# =============================================================================
-
-@main.command()
+@browse.command()
 @click.argument('agent_name')
 @click.argument('rating', type=click.IntRange(1, 5))
 def rate(agent_name: str, rating: int):
     """Rate an agent from 1 to 5 stars.
     
     Note: In a full implementation, this would require proof of download.
-    For now, it updates the rating directly.
     
     Example:
-        ah rate code-reviewer 5
+        ah browse rate code-reviewer 5
     """
     agent = get_agent(agent_name)
     if not agent:
         console.print(f"[red]Agent '{agent_name}' not found[/red]")
         raise SystemExit(1)
     
-    # Update rating (simplified - in production would verify download receipt)
-    # For now, we'll just show what would happen
     new_sum = getattr(agent, 'rating_sum', 0) + rating
     new_count = getattr(agent, 'rating_count', 0) + 1
     new_avg = new_sum / new_count
     
     console.print(Panel(
-        f"[green]✓[/green] Rated [bold]{agent_name}[/bold]: {rating}/5 stars\n\n"
+        f"[green]![/green] Rated [bold]{agent_name}[/bold]: {rating}/5 stars\n\n"
         f"[bold]New average:[/bold] {new_avg:.1f}/5 ({new_count} ratings)\n\n"
         f"[dim]In production, this would require a download receipt.[/dim]",
         title="Rating Submitted",
