@@ -14,7 +14,7 @@ from rich.table import Table
 from rich.panel import Panel
 from rich import box
 
-# Configure dark orange theme for CLI help
+# Configure blue theme for CLI help
 click.rich_click.STYLE_OPTION = "#45c1ff"
 click.rich_click.STYLE_ARGUMENT = "#45c1ff"
 click.rich_click.STYLE_COMMAND = "bold #45c1ff"
@@ -35,6 +35,8 @@ from .database import (
     delete_agent,
     update_agent_rating,
     update_badges,
+    update_agent,
+    get_version_history,
 )
 from .manifest import load_manifest
 from .models import LifecycleState, calculate_execution_level
@@ -83,6 +85,9 @@ def all_commands():
   ah publish init <name> --edit     Create and open in editor
   ah publish register <file>        Register agent from manifest
   ah publish register --docs        Open manifest docs in browser
+  ah publish update <name> -b patch Bump version (major/minor/patch)
+  ah publish update <name> -m file  Update from manifest file
+  ah publish history <name>         View version history
   ah publish deprecate <name>       Mark agent as deprecated
   ah publish deprecate <name> -r    Include deprecation reason
   ah publish remove <name>          Delete agent from registry
@@ -473,15 +478,21 @@ def verify_attestations(manifest_path: str):
 @main.group()
 def publish():
     """Commands for agent authors and publishers.
-    
+
     Use these commands to register, manage, and fork agents.
-    
+
     \b
     Workflow:
       1. ah publish init <name>       Create a manifest template
       2. ah trust sign <file>         Sign the manifest
       3. ah publish register <file>   Register the agent
-    
+
+    \b
+    Updates:
+      ah publish update <name> -b     Bump version (major/minor/patch)
+      ah publish update <name> -m     Update from manifest file
+      ah publish history <name>       View version history
+
     \b
     Management:
       ah publish deprecate <name>     Mark as deprecated
@@ -613,7 +624,7 @@ def deprecate(name: str, reason: str):
 @click.confirmation_option(prompt='Are you sure you want to remove this agent?')
 def remove(name: str):
     """Remove an agent from the registry.
-    
+
     Example:
         ah publish remove my-agent
     """
@@ -622,6 +633,138 @@ def remove(name: str):
     else:
         console.print(f"[red]Agent '{name}' not found[/red]")
         raise SystemExit(1)
+
+
+@publish.command()
+@click.argument('name')
+@click.option('--manifest', '-m', type=click.Path(exists=True),
+              help='Update from a manifest file')
+@click.option('--bump', '-b', type=click.Choice(['major', 'minor', 'patch']),
+              help='Auto-increment version (major, minor, or patch)')
+def update(name: str, manifest: str, bump: str):
+    """Update an existing agent with new manifest or version bump.
+
+    Updates an agent and stores the previous version in history.
+    You can update from a manifest file, bump the version, or both.
+
+    \b
+    Examples:
+        ah publish update my-agent --bump patch
+        ah publish update my-agent --manifest my-agent.yaml
+        ah publish update my-agent -m my-agent.yaml -b minor
+    """
+    # Check agent exists
+    agent = get_agent(name)
+    if not agent:
+        console.print(f"[red]Agent '{name}' not found[/red]")
+        raise SystemExit(1)
+
+    # Need at least one of manifest or bump
+    if not manifest and not bump:
+        console.print(Panel(
+            "[yellow]![/yellow] No changes specified\n\n"
+            "[bold]Options:[/bold]\n"
+            "  --manifest, -m <file>    Update from a manifest file\n"
+            "  --bump, -b <type>        Bump version (major, minor, patch)\n\n"
+            "[dim]Example: ah publish update my-agent --bump patch[/dim]",
+            title="Update Help",
+            border_style="yellow"
+        ))
+        raise SystemExit(1)
+
+    try:
+        old_version = agent.version
+
+        # Load new record from manifest if provided
+        new_record = None
+        if manifest:
+            path = Path(manifest)
+            new_record = load_manifest(path)
+            # Ensure name matches
+            if new_record.name != name:
+                console.print(f"[red]Error:[/red] Manifest name '{new_record.name}' does not match '{name}'")
+                raise SystemExit(1)
+
+        # Perform update
+        updated = update_agent(name, new_record, bump)
+
+        # Build output message
+        changes = []
+        if manifest:
+            changes.append(f"[bold]Manifest:[/bold] {Path(manifest).name}")
+        if bump:
+            changes.append(f"[bold]Version:[/bold] {old_version} -> {updated.version}")
+        elif new_record and new_record.version != old_version:
+            changes.append(f"[bold]Version:[/bold] {old_version} -> {updated.version}")
+
+        console.print(Panel(
+            f"[green]![/green] Agent [bold]{name}[/bold] updated successfully\n\n" +
+            "\n".join(changes) + "\n\n"
+            f"[dim]Previous version ({old_version}) saved to history.[/dim]\n"
+            f"[dim]View history with: ah publish history {name}[/dim]",
+            title="Agent Updated",
+            border_style="green"
+        ))
+
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise SystemExit(1)
+    except Exception as e:
+        console.print(f"[red]Update failed:[/red] {e}")
+        raise SystemExit(1)
+
+
+@publish.command()
+@click.argument('name')
+def history(name: str):
+    """Show version history for an agent.
+
+    Displays all previous versions of an agent, from newest to oldest.
+
+    Example:
+        ah publish history my-agent
+    """
+    # Check agent exists
+    agent = get_agent(name)
+    if not agent:
+        console.print(f"[red]Agent '{name}' not found[/red]")
+        raise SystemExit(1)
+
+    versions = get_version_history(name)
+
+    if not versions:
+        console.print(Panel(
+            f"[bold]{name}[/bold] v{agent.version} [dim](current)[/dim]\n\n"
+            "[dim]No previous versions recorded.[/dim]",
+            title="Version History",
+            border_style="#45c1ff"
+        ))
+        return
+
+    # Build history display
+    table = Table(title=f"Version History: {name}", box=box.ROUNDED, show_lines=True)
+    table.add_column("Version", style="cyan", no_wrap=True)
+    table.add_column("Updated", style="dim")
+    table.add_column("Description")
+
+    # Add current version first
+    table.add_row(
+        f"{agent.version} [green](current)[/green]",
+        agent.updated_at.strftime("%Y-%m-%d %H:%M") if agent.updated_at else "--",
+        agent.description[:50] + "..." if len(agent.description) > 50 else agent.description
+    )
+
+    # Add history
+    for entry in versions:
+        table.add_row(
+            entry["version"],
+            entry["updated_at"][:16] if entry["updated_at"] else "--",
+            (entry["description"][:50] + "...") if entry["description"] and len(entry["description"]) > 50 else (entry["description"] or "--")
+        )
+
+    console.print(table)
+    console.print()
+    console.print(f"[dim]Total versions: {len(versions) + 1}[/dim]")
 
 
 @publish.command()

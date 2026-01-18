@@ -115,6 +115,171 @@ SLSA-style attestations for verifiable evidence about agents.
 
 ---
 
+## Phase 2.6: Trusted Verifier Registry [NOT STARTED]
+
+**Problem:** Currently, attestations prove WHO made a claim, but not that the signer is a TRUSTED verifier. A malicious author could sign their own "tests passed" attestation.
+
+**Solution:** A registry of known, trusted verifier public keys. Verification checks if the attestation's `public_key` belongs to a recognized verifier.
+
+### Two Approaches to GitHub Actions Verification
+
+| Aspect | Approach 1: Your Own Key | Approach 2: Sigstore/OIDC |
+|--------|--------------------------|---------------------------|
+| Setup | Store keypair in GitHub Secrets | Keyless! Uses GitHub's OIDC |
+| Key management | You manage private key | No private key needed |
+| Trust anchor | Your public key | GitHub's OIDC identity |
+| Verification | Check against your key | Query Sigstore/Rekor |
+| Auditability | Manual | Built-in transparency log |
+| Status | ✅ Example exists | ❌ Not implemented |
+
+### Approach 1: Author's Keypair in GitHub Secrets (Current)
+
+Already implemented in `examples/github-actions-attestation.yaml`:
+
+```yaml
+# Author stores THEIR private key in GitHub Secrets
+- name: Set up signing keys
+  run: |
+    echo "${{ secrets.AGENTHUB_PRIVATE_KEY }}" > ~/.agenthub/keys/private.pem
+
+# GitHub Actions signs with author's key
+- name: Add test attestation
+  run: |
+    ah trust attest my-agent.yaml --type test --statement "Tests passed" --verifier "github-actions"
+```
+
+**Trust model:** Users trust the AUTHOR's public key. GitHub just runs the tests.
+
+### Approach 2: Sigstore/Fulcio Keyless Signing (Production-Grade)
+
+GitHub's native Artifact Attestations use **Sigstore** for keyless signing via OIDC tokens:
+
+```yaml
+# No private key needed! GitHub's OIDC proves identity
+- name: Attest Build Provenance
+  uses: actions/attest-build-provenance@v1
+  with:
+    subject-path: 'dist/*'
+```
+
+**How it works:**
+1. GitHub generates an OIDC token proving: "This is workflow X in repo Y"
+2. Sigstore's Fulcio CA issues a short-lived certificate for that identity
+3. Attestation is signed with ephemeral key, recorded in Rekor transparency log
+4. Verifiers check Rekor: "Did GitHub Actions really produce this?"
+
+**OIDC Identity format:**
+```
+https://github.com/owner/repo/.github/workflows/ci.yml@refs/heads/main
+```
+
+### Conceptual Implementation: Trusted Verifier Registry
+
+```python
+# signing.py - Trusted verifier registry
+TRUSTED_VERIFIERS = {
+    # Verifier name → expected public key (base64)
+    "github-actions": "base64-encoded-github-public-key",
+    "gitlab-ci": "base64-encoded-gitlab-key",
+    "security-auditor-xyz": "base64-encoded-auditor-key",
+    "agenthub-registry": "base64-encoded-registry-key",
+}
+
+def verify_attestation_trusted(attestation: dict) -> Tuple[bool, Optional[str], bool]:
+    """
+    Verify attestation signature AND check if signer is trusted.
+    
+    Returns:
+        (is_valid, error_message, is_trusted_verifier)
+    """
+    # First, verify cryptographic signature
+    is_valid, error = verify_attestation(attestation)
+    if not is_valid:
+        return False, error, False
+    
+    # Check if verifier is in trusted registry
+    verifier = attestation.get("verifier")
+    public_key = attestation.get("public_key")
+    
+    if verifier in TRUSTED_VERIFIERS:
+        expected_key = TRUSTED_VERIFIERS[verifier]
+        if public_key == expected_key:
+            return True, None, True  # Trusted verifier
+        else:
+            return True, "Signature valid but key doesn't match known verifier", False
+    
+    return True, None, False  # Valid but unknown verifier
+```
+
+### Conceptual Implementation: Sigstore Verification
+
+```python
+# signing.py - Sigstore/GitHub OIDC verification
+def verify_github_oidc_attestation(attestation: dict) -> Tuple[bool, Optional[str]]:
+    """
+    Verify attestation signed by GitHub Actions using Sigstore.
+    
+    Checks:
+    1. Signature is valid in Sigstore
+    2. OIDC identity matches expected repo/workflow
+    3. Entry exists in Rekor transparency log
+    """
+    from sigstore.verify import Verifier
+    from sigstore.verify.policy import Identity
+    
+    oidc_identity = attestation.get("oidc_identity")
+    # e.g., "https://github.com/owner/repo/.github/workflows/ci.yml@refs/heads/main"
+    
+    signature = attestation.get("sigstore_signature")
+    certificate = attestation.get("sigstore_certificate")
+    
+    verifier = Verifier.production()
+    
+    # Verify the signature came from the claimed GitHub workflow
+    identity = Identity(
+        identity=oidc_identity,
+        issuer="https://token.actions.githubusercontent.com"
+    )
+    
+    try:
+        verifier.verify(
+            input_=attestation["statement"].encode(),
+            signature=base64.b64decode(signature),
+            certificate=certificate,
+            identity=identity
+        )
+        return True, None
+    except Exception as e:
+        return False, f"Sigstore verification failed: {e}"
+```
+
+### Tasks: Basic Trusted Verifiers
+
+- [ ] `TRUSTED_VERIFIERS` registry in `signing.py` (start with placeholder keys)
+- [ ] `verify_attestation_trusted()` function
+- [ ] `ah trust verify-attestations --strict` flag (fail if verifier not trusted)
+- [ ] Display trust level in output: "✓ Valid (Trusted: github-actions)" vs "✓ Valid (Unknown verifier)"
+- [ ] CLI command: `ah trust add-verifier <name> <public-key>`
+- [ ] Config file: `~/.agenthub/trusted-verifiers.yaml`
+
+### Tasks: Sigstore/GitHub OIDC Integration
+
+- [ ] Add `sigstore` Python library as optional dependency
+- [ ] New attestation fields: `oidc_identity`, `sigstore_signature`, `sigstore_certificate`
+- [ ] `verify_github_oidc_attestation()` function
+- [ ] `ah trust attest --sigstore` flag for keyless signing
+- [ ] `ah trust verify-attestations --check-rekor` flag to query transparency log
+- [ ] GitHub Actions example using `actions/attest-build-provenance@v1`
+- [ ] Map GitHub's SLSA provenance format to AgentHub attestation schema
+
+### Tasks: Key Distribution & Transparency
+
+- [ ] Fetch trusted keys from AgentHub server
+- [ ] Certificate transparency log for verifier key changes
+- [ ] Rekor log verification for Sigstore attestations
+
+---
+
 ## Phase 3: Backend Server [COMPLETE]
 
 Flask REST API for shared registry.
@@ -152,6 +317,17 @@ Flask REST API for shared registry.
 - [x] Persist ratings to database
 - [x] Auto-compute "popular" badge at >10 downloads
 - [x] Display execution level in `ah info` output
+
+### Agent Update & Version History [COMPLETE]
+
+- [x] `version_history` table for tracking previous versions
+- [x] `bump_version()` utility (major/minor/patch increments)
+- [x] `update_agent()` database function with history preservation
+- [x] `get_version_history()` to retrieve version history
+- [x] `ah publish update <name> --bump patch` — Auto-increment version
+- [x] `ah publish update <name> --manifest <file>` — Update from manifest
+- [x] `ah publish update <name> -m <file> -b minor` — Combined update
+- [x] `ah publish history <name>` — View version history
 
 ---
 
@@ -390,4 +566,9 @@ ah list
 ah trust status
 ah fork code-reviewer --name test
 ah rate code-reviewer 5
+
+# Version update testing
+ah publish update my-agent --bump patch
+ah publish update my-agent --manifest updated-agent.yaml
+ah publish history my-agent
 ```

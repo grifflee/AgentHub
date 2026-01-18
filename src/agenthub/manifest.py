@@ -39,12 +39,14 @@ def load_manifest(path: Path) -> AgentRecord:
     if not isinstance(data, dict):
         raise ValueError("Manifest must be a YAML dictionary")
     
-    # Convert protocol strings to Protocol enum
+    # Convert protocol strings to Protocol enum (case-insensitive)
     if 'protocols' in data:
         protocols = []
         for p in data['protocols']:
             try:
-                protocols.append(Protocol(p))
+                # Normalize to uppercase for matching (MCP, A2A are uppercase enums)
+                normalized = p.upper() if isinstance(p, str) else p
+                protocols.append(Protocol(normalized))
             except ValueError:
                 protocols.append(Protocol.CUSTOM)
         data['protocols'] = protocols

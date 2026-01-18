@@ -59,25 +59,47 @@ def init_database() -> None:
                 updated_at TEXT NOT NULL
             )
         """)
-        
+
+        # Create version history table for tracking updates
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS version_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_name TEXT NOT NULL,
+                version TEXT NOT NULL,
+                description TEXT,
+                author TEXT,
+                capabilities TEXT,
+                protocols TEXT,
+                permissions TEXT,
+                manifest_snapshot TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (agent_name) REFERENCES agents(name) ON DELETE CASCADE
+            )
+        """)
+
         # Create index for faster capability searches
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_agents_name ON agents(name)
         """)
-        
+
+        # Create index for version history lookups
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_version_history_agent ON version_history(agent_name)
+        """)
+
         # Migration: Add rating columns if they don't exist (for existing DBs)
         for column, default in [("rating_sum", 0), ("rating_count", 0), ("download_count", 0)]:
             try:
                 conn.execute(f"ALTER TABLE agents ADD COLUMN {column} INTEGER DEFAULT {default}")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-        
+
         # Migration: Add badges column if it doesn't exist
         try:
             conn.execute("ALTER TABLE agents ADD COLUMN badges TEXT DEFAULT '[]'")
         except sqlite3.OperationalError:
             pass  # Column already exists
-        
+
         conn.commit()
     finally:
         conn.close()
@@ -478,3 +500,207 @@ def _dict_to_record(data: dict) -> AgentRecord:
         created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None,
         updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else None,
     )
+
+
+def bump_version(version: str, bump_type: str) -> str:
+    """
+    Increment a semantic version string.
+
+    Args:
+        version: Current version (e.g., "1.2.3")
+        bump_type: One of "major", "minor", or "patch"
+
+    Returns:
+        New version string
+
+    Raises:
+        ValueError: If version format is invalid or bump_type is unknown
+    """
+    import re
+    match = re.match(r'^(\d+)\.(\d+)\.(\d+)$', version)
+    if not match:
+        raise ValueError(f"Invalid version format: {version}")
+
+    major, minor, patch = int(match.group(1)), int(match.group(2)), int(match.group(3))
+
+    if bump_type == "major":
+        return f"{major + 1}.0.0"
+    elif bump_type == "minor":
+        return f"{major}.{minor + 1}.0"
+    elif bump_type == "patch":
+        return f"{major}.{minor}.{patch + 1}"
+    else:
+        raise ValueError(f"Unknown bump type: {bump_type}")
+
+
+def update_agent(
+    name: str,
+    new_record: Optional[AgentRecord] = None,
+    bump_type: Optional[str] = None
+) -> AgentRecord:
+    """
+    Update an existing agent, storing the previous version in history.
+
+    Args:
+        name: Name of the agent to update
+        new_record: New agent record with updated fields (if None, only bump version)
+        bump_type: Version bump type ("major", "minor", "patch") - auto-increments version
+
+    Returns:
+        Updated AgentRecord
+
+    Raises:
+        ValueError: If agent not found or validation fails
+    """
+    # Remote API mode
+    if is_remote_mode():
+        from . import api_client
+        data = None
+        if new_record:
+            data = {
+                "name": new_record.name,
+                "version": new_record.version,
+                "description": new_record.description,
+                "author": new_record.author,
+                "capabilities": new_record.capabilities,
+                "protocols": [p.value for p in new_record.protocols],
+                "permissions": new_record.permissions,
+                "lifecycle_state": new_record.lifecycle_state.value,
+            }
+        result = api_client.update_agent(name, data, bump_type)
+        return _dict_to_record(result)
+
+    # Local SQLite mode
+    conn = get_connection()
+    now = datetime.utcnow().isoformat()
+
+    try:
+        # Get existing agent
+        row = conn.execute("SELECT * FROM agents WHERE name = ?", (name,)).fetchone()
+        if not row:
+            raise ValueError(f"Agent '{name}' not found")
+
+        existing = _row_to_record(row)
+
+        # Store current version in history
+        manifest_snapshot = json.dumps({
+            "name": existing.name,
+            "version": existing.version,
+            "description": existing.description,
+            "author": existing.author,
+            "capabilities": existing.capabilities,
+            "protocols": [p.value for p in existing.protocols],
+            "permissions": existing.permissions,
+            "lifecycle_state": existing.lifecycle_state.value,
+        })
+
+        conn.execute(
+            """
+            INSERT INTO version_history
+            (agent_name, version, description, author, capabilities, protocols, permissions, manifest_snapshot, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                existing.name,
+                existing.version,
+                existing.description,
+                existing.author,
+                json.dumps(existing.capabilities),
+                json.dumps([p.value for p in existing.protocols]),
+                json.dumps(existing.permissions),
+                manifest_snapshot,
+                existing.updated_at.isoformat() if existing.updated_at else now,
+            )
+        )
+
+        # Determine new values
+        if new_record:
+            new_version = new_record.version
+            new_description = new_record.description
+            new_author = new_record.author
+            new_capabilities = new_record.capabilities
+            new_protocols = new_record.protocols
+            new_permissions = new_record.permissions
+            new_lifecycle = new_record.lifecycle_state
+        else:
+            new_version = existing.version
+            new_description = existing.description
+            new_author = existing.author
+            new_capabilities = existing.capabilities
+            new_protocols = existing.protocols
+            new_permissions = existing.permissions
+            new_lifecycle = existing.lifecycle_state
+
+        # Apply version bump if requested
+        if bump_type:
+            new_version = bump_version(new_version, bump_type)
+
+        # Update the agent
+        conn.execute(
+            """
+            UPDATE agents
+            SET version = ?, description = ?, author = ?, capabilities = ?,
+                protocols = ?, permissions = ?, lifecycle_state = ?, updated_at = ?
+            WHERE name = ?
+            """,
+            (
+                new_version,
+                new_description,
+                new_author,
+                json.dumps(new_capabilities),
+                json.dumps([p.value for p in new_protocols]),
+                json.dumps(new_permissions),
+                new_lifecycle.value,
+                now,
+                name,
+            )
+        )
+        conn.commit()
+
+        # Return updated record
+        updated_row = conn.execute("SELECT * FROM agents WHERE name = ?", (name,)).fetchone()
+        return _row_to_record(updated_row)
+
+    finally:
+        conn.close()
+
+
+def get_version_history(name: str) -> list[dict]:
+    """
+    Get version history for an agent.
+
+    Args:
+        name: Agent name
+
+    Returns:
+        List of version history entries, newest first
+    """
+    # Remote API mode
+    if is_remote_mode():
+        from . import api_client
+        return api_client.get_version_history(name)
+
+    # Local SQLite mode
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT version, description, updated_at, manifest_snapshot
+            FROM version_history
+            WHERE agent_name = ?
+            ORDER BY id DESC
+            """,
+            (name,)
+        ).fetchall()
+
+        return [
+            {
+                "version": row["version"],
+                "description": row["description"],
+                "updated_at": row["updated_at"],
+                "manifest": json.loads(row["manifest_snapshot"]) if row["manifest_snapshot"] else None,
+            }
+            for row in rows
+        ]
+    finally:
+        conn.close()

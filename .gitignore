@@ -6,7 +6,52 @@ agenthubdetails
 # Agent workflows (private to local development)
 .agent/
 
-# Python bytecode
+# Personal test/scratch files
+griffen-agent-1.yaml
+
+# ========================================
+# SECURITY - Secrets and credentials
+# ========================================
+
+# Environment files (may contain API keys, secrets)
+.env
+.env.*
+.env.local
+.env.*.local
+!.env.example
+
+# Key files and certificates
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*_rsa
+*_dsa
+*_ecdsa
+*_ed25519
+*.pub
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+
+# Secrets and credentials
+*secret*
+*credential*
+*password*
+*.secrets
+secrets.json
+secrets.yaml
+secrets.yml
+credentials.json
+
+# ========================================
+# Python
+# ========================================
+
+# Bytecode
 __pycache__/
 *.py[cod]
 *$py.class
@@ -22,34 +67,74 @@ eggs/
 sdist/
 wheels/
 *.manifest
+pip-wheel-metadata/
 
 # Virtual environments
 venv/
 env/
 .venv/
 ENV/
+.python-version
 
+# Type checking and linting caches
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.pyre/
+
+# ========================================
 # IDE / Editors
+# ========================================
+
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS files
-.DS_Store
-Thumbs.db
+# Claude Code local settings (may contain user-specific permissions)
+.claude/
 
+# ========================================
+# OS files
+# ========================================
+
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ========================================
 # Testing
+# ========================================
+
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
 .tox/
+.nox/
 
-# Logs
+# ========================================
+# Logs and temporary files
+# ========================================
+
 *.log
+*.tmp
+*.temp
+*.bak
+*.backup
+*.cache
 
+# ========================================
 # Database files
+# ========================================
+
 *.db
 *.sqlite
 *.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
