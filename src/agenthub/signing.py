@@ -483,18 +483,177 @@ def add_attestation_to_manifest(manifest_path: Path, attestation: dict) -> dict:
 def verify_all_attestations(manifest_data: dict) -> list[Tuple[int, bool, Optional[str]]]:
     """
     Verify all attestations in a manifest.
-    
+
     Args:
         manifest_data: Parsed manifest dictionary
-        
+
     Returns:
         List of (index, is_valid, error_message) tuples for each attestation
     """
     attestations = manifest_data.get("attestations", [])
     results = []
-    
+
     for i, attestation in enumerate(attestations):
         is_valid, error = verify_attestation(attestation)
         results.append((i, is_valid, error))
-    
+
+    return results
+
+
+# =============================================================================
+# Trusted Verifier Registry
+# =============================================================================
+
+def get_trusted_verifiers_path() -> Path:
+    """Get the path to the trusted verifiers config file."""
+    return get_agenthub_dir() / "trusted-verifiers.yaml"
+
+
+def load_trusted_verifiers() -> dict[str, dict]:
+    """
+    Load trusted verifiers from config file.
+
+    Returns:
+        Dictionary of verifier_name -> {public_key, added_at, description}
+    """
+    path = get_trusted_verifiers_path()
+
+    if not path.exists():
+        return {}
+
+    with open(path, "r") as f:
+        data = yaml.safe_load(f) or {}
+
+    return data.get("verifiers", {})
+
+
+def save_trusted_verifiers(verifiers: dict) -> None:
+    """
+    Save trusted verifiers to config file.
+
+    Args:
+        verifiers: Dictionary of verifier_name -> {public_key, added_at, description}
+    """
+    path = get_trusted_verifiers_path()
+
+    data = {"verifiers": verifiers}
+
+    with open(path, "w") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+
+
+def add_trusted_verifier(name: str, public_key: str, description: str = "") -> None:
+    """
+    Add a trusted verifier to the registry.
+
+    Args:
+        name: Unique name for the verifier (e.g., "github-actions")
+        public_key: Base64-encoded public key
+        description: Optional description of the verifier
+    """
+    verifiers = load_trusted_verifiers()
+
+    verifiers[name] = {
+        "public_key": public_key,
+        "added_at": datetime.now(timezone.utc).isoformat(),
+        "description": description,
+    }
+
+    save_trusted_verifiers(verifiers)
+
+
+def remove_trusted_verifier(name: str) -> bool:
+    """
+    Remove a trusted verifier from the registry.
+
+    Args:
+        name: Name of the verifier to remove
+
+    Returns:
+        True if removed, False if not found
+    """
+    verifiers = load_trusted_verifiers()
+
+    if name not in verifiers:
+        return False
+
+    del verifiers[name]
+    save_trusted_verifiers(verifiers)
+    return True
+
+
+def is_trusted_verifier(verifier_name: str, public_key: str) -> Tuple[bool, Optional[str]]:
+    """
+    Check if a verifier is in the trusted registry.
+
+    Args:
+        verifier_name: Name of the verifier
+        public_key: Base64-encoded public key from the attestation
+
+    Returns:
+        Tuple of (is_trusted, matched_name)
+        If trusted: (True, "name-in-registry")
+        If not trusted: (False, None)
+    """
+    verifiers = load_trusted_verifiers()
+
+    # First check if the verifier name matches
+    if verifier_name in verifiers:
+        if verifiers[verifier_name]["public_key"] == public_key:
+            return True, verifier_name
+
+    # Also check if any verifier has this public key (name may differ)
+    for name, data in verifiers.items():
+        if data["public_key"] == public_key:
+            return True, name
+
+    return False, None
+
+
+def verify_attestation_trusted(attestation_data: dict) -> Tuple[bool, Optional[str], bool, Optional[str]]:
+    """
+    Verify attestation signature AND check if signer is trusted.
+
+    Args:
+        attestation_data: Attestation dictionary
+
+    Returns:
+        Tuple of (is_valid, error_message, is_trusted, trusted_verifier_name)
+        - is_valid: True if signature is cryptographically valid
+        - error_message: Error description if invalid, None otherwise
+        - is_trusted: True if verifier is in trusted registry
+        - trusted_verifier_name: Name of matched trusted verifier, or None
+    """
+    # First verify cryptographic signature
+    is_valid, error = verify_attestation(attestation_data)
+
+    if not is_valid:
+        return False, error, False, None
+
+    # Check if verifier is trusted
+    verifier_name = attestation_data.get("verifier", "")
+    public_key = attestation_data.get("public_key", "")
+
+    is_trusted, matched_name = is_trusted_verifier(verifier_name, public_key)
+
+    return True, None, is_trusted, matched_name
+
+
+def verify_all_attestations_trusted(manifest_data: dict) -> list[Tuple[int, bool, Optional[str], bool, Optional[str]]]:
+    """
+    Verify all attestations in a manifest with trust status.
+
+    Args:
+        manifest_data: Parsed manifest dictionary
+
+    Returns:
+        List of (index, is_valid, error_message, is_trusted, trusted_name) tuples
+    """
+    attestations = manifest_data.get("attestations", [])
+    results = []
+
+    for i, attestation in enumerate(attestations):
+        is_valid, error, is_trusted, trusted_name = verify_attestation_trusted(attestation)
+        results.append((i, is_valid, error, is_trusted, trusted_name))
+
     return results

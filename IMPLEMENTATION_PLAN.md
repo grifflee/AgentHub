@@ -1,7 +1,7 @@
 # AgentHub Implementation Plan
 
-> **Single source of truth for all development on AgentHub.**  
-> Last updated: 2026-01-17 (expanded with Phases 8-11 from research papers)
+> **Single source of truth for all development on AgentHub.**
+> Last updated: 2026-01-18 (Phase 2.6 Trusted Verifier Registry complete)
 
 ---
 
@@ -115,7 +115,7 @@ SLSA-style attestations for verifiable evidence about agents.
 
 ---
 
-## Phase 2.6: Trusted Verifier Registry [NOT STARTED]
+## Phase 2.6: Trusted Verifier Registry [COMPLETE]
 
 **Problem:** Currently, attestations prove WHO made a claim, but not that the signer is a TRUSTED verifier. A malicious author could sign their own "tests passed" attestation.
 
@@ -255,12 +255,13 @@ def verify_github_oidc_attestation(attestation: dict) -> Tuple[bool, Optional[st
 
 ### Tasks: Basic Trusted Verifiers
 
-- [ ] `TRUSTED_VERIFIERS` registry in `signing.py` (start with placeholder keys)
-- [ ] `verify_attestation_trusted()` function
-- [ ] `ah trust verify-attestations --strict` flag (fail if verifier not trusted)
-- [ ] Display trust level in output: "✓ Valid (Trusted: github-actions)" vs "✓ Valid (Unknown verifier)"
-- [ ] CLI command: `ah trust add-verifier <name> <public-key>`
-- [ ] Config file: `~/.agenthub/trusted-verifiers.yaml`
+- [x] Trusted verifier registry in `~/.agenthub/trusted-verifiers.yaml`
+- [x] `verify_attestation_trusted()` function in `signing.py`
+- [x] `ah trust verify-attestations --strict` flag (fail if verifier not trusted)
+- [x] Display trust level in output: "✓ Valid (Trusted: github-actions)" vs "✓ Valid (Unknown verifier)"
+- [x] CLI command: `ah trust add-verifier <name> <public-key> -d "description"`
+- [x] CLI command: `ah trust list-verifiers`
+- [x] CLI command: `ah trust remove-verifier <name>`
 
 ### Tasks: Sigstore/GitHub OIDC Integration
 

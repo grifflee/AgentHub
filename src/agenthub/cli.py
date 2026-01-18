@@ -102,6 +102,12 @@ def all_commands():
                                     Add signed attestation to manifest
   ah trust verify-attestations <file>
                                     Verify all attestations in manifest
+  ah trust verify-attestations <file> --strict
+                                    Fail if any verifier is not trusted
+  ah trust add-verifier <name> <key>
+                                    Add a trusted verifier
+  ah trust list-verifiers           List all trusted verifiers
+  ah trust remove-verifier <name>   Remove a trusted verifier
 
 [bold]UTILITY COMMANDS[/bold]  (hidden from main help)
   ah example-manifest               Show example manifest inline
@@ -409,26 +415,31 @@ def attest(manifest_path: str, attestation_type: str, statement: str,
 
 @trust.command('verify-attestations')
 @click.argument('manifest_path', type=click.Path(exists=True))
-def verify_attestations(manifest_path: str):
+@click.option('--strict', is_flag=True, help='Fail if any verifier is not in trusted registry')
+def verify_attestations(manifest_path: str, strict: bool):
     """Verify all attestations in a manifest.
-    
+
     Checks the signature of each attestation to ensure they haven't been
-    tampered with.
-    
+    tampered with. Also shows whether each verifier is in your trusted
+    verifier registry.
+
+    Use --strict to require all attestations come from trusted verifiers.
+
     Example:
         ah trust verify-attestations my-agent.yaml
+        ah trust verify-attestations my-agent.yaml --strict
     """
     import yaml
-    from .signing import verify_all_attestations
-    
+    from .signing import verify_all_attestations_trusted
+
     try:
         path = Path(manifest_path)
-        
+
         with open(path, "r") as f:
             manifest_data = yaml.safe_load(f)
-        
+
         attestations = manifest_data.get("attestations", [])
-        
+
         if not attestations:
             console.print(Panel(
                 f"[yellow]![/yellow] No attestations found in [bold]{path.name}[/bold]\n\n"
@@ -437,37 +448,191 @@ def verify_attestations(manifest_path: str):
                 border_style="yellow"
             ))
             return
-        
-        results = verify_all_attestations(manifest_data)
-        
-        all_valid = all(is_valid for _, is_valid, _ in results)
-        
+
+        results = verify_all_attestations_trusted(manifest_data)
+
+        all_valid = all(is_valid for _, is_valid, _, _, _ in results)
+        untrusted_count = sum(1 for _, is_valid, _, is_trusted, _ in results if is_valid and not is_trusted)
+
         output_lines = []
-        for i, is_valid, error in results:
+        for i, is_valid, error, is_trusted, trusted_name in results:
             att = attestations[i]
-            status = "[green]✓ VALID[/green]" if is_valid else f"[red]✗ INVALID[/red] ({error})"
-            output_lines.append(
-                f"  {i+1}. [{att.get('type', 'unknown')}] {att.get('verifier', 'unknown')}: {status}"
-            )
-        
-        if all_valid:
+            att_type = att.get('type', 'unknown')
+            verifier = att.get('verifier', 'unknown')
+            statement = att.get('statement', '')
+
+            output_lines.append(f"\n[bold][{i+1}] {att_type} - {verifier}[/bold]")
+
+            if is_valid:
+                if is_trusted:
+                    output_lines.append(f"    [green]✓ VALID[/green] [cyan](Trusted: {trusted_name})[/cyan]")
+                else:
+                    output_lines.append(f"    [green]✓ VALID[/green] [yellow](Unknown verifier)[/yellow]")
+            else:
+                output_lines.append(f"    [red]✗ INVALID[/red]: {error}")
+
+            if statement:
+                output_lines.append(f'    "{statement}"')
+
+        # Determine exit status based on mode
+        if strict and untrusted_count > 0:
             console.print(Panel(
-                f"[green]✓[/green] All {len(attestations)} attestation(s) are valid\n\n" +
-                "\n".join(output_lines),
-                title="Attestations Verified",
-                border_style="green"
-            ))
-        else:
-            console.print(Panel(
-                f"[red]✗[/red] Some attestations failed verification\n\n" +
-                "\n".join(output_lines),
+                f"[red]✗[/red] {untrusted_count} attestation(s) from unknown verifiers\n\n"
+                "In strict mode, all attestations must come from trusted\n"
+                "verifiers. Add missing verifiers with:\n"
+                "  [bold]ah trust add-verifier <name> <public-key>[/bold]\n"
+                + "\n".join(output_lines),
                 title="Verification Failed",
                 border_style="red"
             ))
             raise SystemExit(1)
-            
+        elif not all_valid:
+            console.print(Panel(
+                f"[red]✗[/red] Some attestations failed verification\n"
+                + "\n".join(output_lines),
+                title="Verification Failed",
+                border_style="red"
+            ))
+            raise SystemExit(1)
+        else:
+            console.print(Panel(
+                f"[green]✓[/green] All {len(attestations)} attestation(s) are valid\n"
+                + "\n".join(output_lines),
+                title="Attestations Verified",
+                border_style="green"
+            ))
+
+    except SystemExit:
+        raise
     except Exception as e:
         console.print(f"[red]Error verifying attestations:[/red] {e}")
+        raise SystemExit(1)
+
+
+@trust.command('add-verifier')
+@click.argument('name')
+@click.argument('public_key')
+@click.option('--description', '-d', default='', help='Description of this verifier')
+def add_verifier(name: str, public_key: str, description: str):
+    """Add a trusted verifier to your local registry.
+
+    Trusted verifiers are entities whose attestations you trust (e.g., CI
+    systems, security scanners). When verifying attestations, those from
+    trusted verifiers will be highlighted.
+
+    The public key should be base64-encoded (same format as in attestations).
+
+    Example:
+        ah trust add-verifier github-actions <base64-key> -d "GitHub Actions CI"
+        ah trust add-verifier snyk <base64-key> -d "Snyk security scanner"
+    """
+    from .signing import add_trusted_verifier as add_verifier_fn, load_trusted_verifiers
+
+    # Check if verifier already exists
+    existing = load_trusted_verifiers()
+    if name in existing:
+        console.print(Panel(
+            f"[yellow]![/yellow] Verifier [bold]{name}[/bold] already exists\n\n"
+            "[dim]Use [bold]ah trust remove-verifier[/bold] first if you want to update it.[/dim]",
+            title="Verifier Exists",
+            border_style="yellow"
+        ))
+        raise SystemExit(1)
+
+    try:
+        add_verifier_fn(name, public_key, description)
+
+        # Truncate key for display
+        key_display = public_key[:20] + "..." + public_key[-10:] if len(public_key) > 33 else public_key
+
+        console.print(Panel(
+            f"[green]✓[/green] Added trusted verifier: [bold]{name}[/bold]\n\n"
+            f"[bold]Public Key:[/bold] {key_display}\n"
+            f"[bold]Description:[/bold] {description or '[dim]none[/dim]'}",
+            title="Verifier Added",
+            border_style="green"
+        ))
+    except Exception as e:
+        console.print(f"[red]Error adding verifier:[/red] {e}")
+        raise SystemExit(1)
+
+
+@trust.command('list-verifiers')
+def list_verifiers():
+    """List all trusted verifiers in your local registry.
+
+    Shows all verifiers you've added to your trusted registry, along with
+    their public keys and when they were added.
+
+    Example:
+        ah trust list-verifiers
+    """
+    from .signing import load_trusted_verifiers
+
+    verifiers = load_trusted_verifiers()
+
+    if not verifiers:
+        console.print(Panel(
+            "[yellow]![/yellow] No trusted verifiers configured\n\n"
+            "[dim]Add verifiers with [bold]ah trust add-verifier <name> <public-key>[/bold][/dim]",
+            title="Trusted Verifiers",
+            border_style="yellow"
+        ))
+        return
+
+    table = Table(box=box.ROUNDED, show_lines=True)
+    table.add_column("Name", style="cyan", no_wrap=True)
+    table.add_column("Public Key", style="dim")
+    table.add_column("Description")
+    table.add_column("Added", style="dim")
+
+    for name, data in verifiers.items():
+        key = data.get("public_key", "")
+        key_display = key[:12] + "..." + key[-8:] if len(key) > 23 else key
+
+        added_at = data.get("added_at", "")
+        added_display = added_at[:10] if added_at else "--"
+
+        table.add_row(
+            name,
+            key_display,
+            data.get("description", "") or "[dim]--[/dim]",
+            added_display
+        )
+
+    console.print(Panel(
+        table,
+        title="Trusted Verifiers",
+        border_style="#45c1ff"
+    ))
+
+
+@trust.command('remove-verifier')
+@click.argument('name')
+def remove_verifier(name: str):
+    """Remove a verifier from your trusted registry.
+
+    After removal, attestations from this verifier will show as "unknown"
+    instead of "trusted" during verification.
+
+    Example:
+        ah trust remove-verifier github-actions
+    """
+    from .signing import remove_trusted_verifier as remove_verifier_fn
+
+    if remove_verifier_fn(name):
+        console.print(Panel(
+            f"[green]✓[/green] Removed trusted verifier: [bold]{name}[/bold]",
+            title="Verifier Removed",
+            border_style="green"
+        ))
+    else:
+        console.print(Panel(
+            f"[red]✗[/red] Verifier [bold]{name}[/bold] not found\n\n"
+            "[dim]Use [bold]ah trust list-verifiers[/bold] to see available verifiers.[/dim]",
+            title="Not Found",
+            border_style="red"
+        ))
         raise SystemExit(1)
 
 
