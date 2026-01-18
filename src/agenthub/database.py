@@ -533,6 +533,31 @@ def bump_version(version: str, bump_type: str) -> str:
         raise ValueError(f"Unknown bump type: {bump_type}")
 
 
+def compare_versions(v1: str, v2: str) -> int:
+    """
+    Compare two semantic version strings.
+
+    Returns:
+        1 if v1 > v2
+        -1 if v1 < v2
+        0 if v1 == v2
+    """
+    import re
+
+    def parse(v):
+        match = re.match(r'^(\d+)\.(\d+)\.(\d+)$', v)
+        if not match:
+            return (0, 0, 0)
+        return tuple(int(x) for x in match.groups())
+
+    p1, p2 = parse(v1), parse(v2)
+    if p1 > p2:
+        return 1
+    if p1 < p2:
+        return -1
+    return 0
+
+
 def update_agent(
     name: str,
     new_record: Optional[AgentRecord] = None,
@@ -615,6 +640,13 @@ def update_agent(
 
         # Determine new values
         if new_record:
+            # If the manifest provides a version, validate it
+            if compare_versions(new_record.version, existing.version) < 0:
+                raise ValueError(
+                    f"Version regression not allowed: manifest version ({new_record.version}) "
+                    f"is lower than current version ({existing.version})"
+                )
+
             new_version = new_record.version
             new_description = new_record.description
             new_author = new_record.author
@@ -622,6 +654,11 @@ def update_agent(
             new_protocols = new_record.protocols
             new_permissions = new_record.permissions
             new_lifecycle = new_record.lifecycle_state
+
+            # If we are updating from manifest and version is SAME as existing,
+            # and no explicit bump was provided, auto-bump patch to ensure progression
+            if not bump_type and compare_versions(new_version, existing.version) == 0:
+                bump_type = "patch"
         else:
             new_version = existing.version
             new_description = existing.description
