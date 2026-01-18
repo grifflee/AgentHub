@@ -640,25 +640,21 @@ def update_agent(
 
         # Determine new values
         if new_record:
-            # If the manifest provides a version, validate it
-            if compare_versions(new_record.version, existing.version) < 0:
-                raise ValueError(
-                    f"Version regression not allowed: manifest version ({new_record.version}) "
-                    f"is lower than current version ({existing.version})"
-                )
+            # If the manifest version is higher than existing, use it.
+            # Otherwise (same or lower), base the update on the existing version and force a bump.
+            if compare_versions(new_record.version, existing.version) > 0:
+                new_version = new_record.version
+            else:
+                new_version = existing.version
+                if not bump_type:
+                    bump_type = "patch"
 
-            new_version = new_record.version
             new_description = new_record.description
             new_author = new_record.author
             new_capabilities = new_record.capabilities
             new_protocols = new_record.protocols
             new_permissions = new_record.permissions
             new_lifecycle = new_record.lifecycle_state
-
-            # If we are updating from manifest and version is SAME as existing,
-            # and no explicit bump was provided, auto-bump patch to ensure progression
-            if not bump_type and compare_versions(new_version, existing.version) == 0:
-                bump_type = "patch"
         else:
             new_version = existing.version
             new_description = existing.description
