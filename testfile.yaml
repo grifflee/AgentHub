@@ -1,0 +1,14 @@
+name: testfile
+version: 1.0.0
+description: abcd
+author: your-name
+capabilities:
+- example-capability-1
+- example-capability-2
+protocols:
+- MCP
+permissions:
+- read-files
+signature: Z9ot7kocT6C9Vh5E2YHwfm5xOL+q8w18ktp5OnXO/czYfJ1klVsRlUDl0OwNf57B3OyMmLBcD/xdm+KDqbfUCg==
+public_key: zG8PONudw5ZCuSu9rvgWvdumDMMFCjbu+Jf+bPyGnHU=
+signed_at: '2026-01-18T20:20:52.781229+00:00'

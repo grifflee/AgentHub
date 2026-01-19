@@ -95,6 +95,10 @@ ENV/
 # Claude Code local settings (may contain user-specific permissions)
 .claude/
 
+# Cursor editor settings and rules
+.cursor/
+.cursorrules
+
 # ========================================
 # OS files
 # ========================================
