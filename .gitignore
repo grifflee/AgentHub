@@ -8,6 +8,14 @@ agenthubdetails
 
 # Personal test/scratch files
 griffen-agent-1.yaml
+testfile.yaml
+
+# AI assistant configuration files (personal to each developer)
+CLAUDE.md
+.gemini/
+
+# Internal planning documents
+IMPLEMENTATION_PLAN.md
 
 # ========================================
 # SECURITY - Secrets and credentials
